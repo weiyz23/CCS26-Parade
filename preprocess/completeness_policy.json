@@ -1,0 +1,26 @@
+{
+  "sources": {
+    "ris": {
+      "collectors": 23,
+      "collector_ids": [
+        "00", "01", "03", "04", "05", "06", "07", "10", "11", "12", "13", "14", "15", "16", "18", "19", "20", "21", "22", "23", "24", "25", "26"
+      ]
+    },
+    "rv": {
+      "collectors": 54,
+      "collector_ids": [
+        "route-views2", "route-views3", "route-views4", "route-views5", "route-views6", "route-views7", "route-views8", "amsix.ams", "cix.atl", "crix.sjo", "getafix.mnl", "decix.fra", "hkix.hkg", "netnod.mmx", "route-views.bdix", "route-views.bknix", "route-views.chicago", "route-views.chile", "route-views.eqix", "route-views.flix", "route-views.gixa", "route-views.gorex", "interlan.otp", "iix.cgk", "iraq-ixp.bgw", "route-views.isc", "ixpn.los", "kinx.icn", "namex.fco", "route-views.kixp", "locix.fra", "route-views.linx", "route-views.mwix", "route-views.napafrica", "route-views.nwax", "pacwave.lax", "pit.scl", "pitmx.qro", "route-views.phoix", "route-views.telxatl", "route-views.wide", "route-views.sydney", "ix-br.gru", "ix-br2.gru", "route-views.sg", "route-views.perth", "route-views.peru", "route-views.sfmix", "route-views.soxrs", "route-views.rio", "route-views.fortaleza", "route-views.uaeix", "route-views.ny", "decix.jhb"
+      ]
+    }
+  },
+  "rules": {
+    "upd": {
+      "ris": "minute_mod_5",
+      "rv": "minute_mod_15"
+    },
+    "rib": {
+      "ris": "hour_mod_8",
+      "rv": "hour_mod_4"
+    }
+  }
+}

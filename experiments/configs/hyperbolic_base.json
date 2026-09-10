@@ -1,0 +1,29 @@
+{
+  "paths": {
+    "data_dir": "dataset/ae_snapshot_20260101",
+    "model_dir": "experiments/results/single/hyperbolic"
+  },
+  "model": {
+    "geometry": "hyperbolic",
+    "embed_dim": 24,
+    "num_vectors": 2
+  },
+  "loss": {
+    "hier_margin": 1.0,
+    "sim_margin": 4.0,
+    "ranking_weight": 0.5,
+    "sim_weight": 0.8,
+    "diversity_weight": 0.0
+  },
+  "train": {
+    "seed": 42,
+    "lr": 0.002,
+    "weight_decay": 0.0,
+    "epochs": 800,
+    "batch_size": 4096,
+    "num_samples_per_profile": 128,
+    "patience": 60,
+    "delta": 1e-05,
+    "mark_only_early_stop": true
+  }
+}

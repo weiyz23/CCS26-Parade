@@ -1,0 +1,14 @@
+# Core pipeline. Install the appropriate torch wheel first (see README).
+torch>=2.0.1
+geoopt==0.5.1
+numpy
+pandas
+tqdm
+requests
+urllib3
+aiohttp
+beautifulsoup4
+matplotlib
+seaborn
+scikit-learn
+umap-learn

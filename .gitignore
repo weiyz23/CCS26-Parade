@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+.conda/
+
+# Data (Root and subdirectories)
+data/
+dataset/
+processed_data/
+saved_models/
+visualizations/
+*.csv
+filter/
+
+# Build, distribution and misc files
+build/
+bin/
+test/
+log/
+experiments/results/
+.pids
+test.*
+
+# IDE
+.vscode/
+.idea/
+
+# Runtime secrets/config
+hyperbolic_model/config.json
+
+# OS
+.DS_Store
