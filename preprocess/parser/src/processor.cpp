@@ -20,7 +20,7 @@
 #include <cstdlib>
 #include <malloc.h>
 #include "helpers.hpp"
-#include "path_extractor.hpp" // Changed: Include shared logic
+#include "path_extractor.hpp"
 
 extern "C" {
 #include <bgpstream.h>
@@ -66,20 +66,15 @@ static bool should_process_upd_file(const string& fname) {
     return fname.rfind("updates.", 0) == 0 || fname.rfind("upd.", 0) == 0;
 }
 
-// 1. Define a 128-bit struct to store the result
 struct PropFingerprint {
-    uint64_t low;  // Low 64 bits
-    uint64_t high; // High 64 bits
+    uint64_t low;
+    uint64_t high;
 };
 
-// --- Data Structures ---
 
-// Global Maps
 unordered_map<string, int32_t> prefix_to_id;
 vector<string> id_to_prefix;
 
-// Vector of AS Pairs to represent a path
-// using PathVector = vector<ASPair>; // Removed in favor of FixedPath
 
 // Path Hash -> ID (Using BGPStream's 32-bit hash combined with origin AS)
 unordered_map<uint64_t, int32_t> path_hash_to_id;
@@ -90,16 +85,12 @@ struct FixedPath {
 };
 vector<FixedPath> id_to_fixed_path;
 vector<uint8_t> id_to_path_len;
-// Linear AS paths are retained once per path ID for supplemental simulations.
-// The normal training/profile pipeline continues to use the compact FixedPath.
+// Retain linear paths for reference_paths.bin; training uses FixedPath.
 vector<vector<uint32_t>> id_to_linear_path;
 vector<uint8_t> id_to_path_is_strict;
 
-// Compact (prefix_id, path_id) keys.  The previous std::set representation
-// allocated one tree node per route and could exceed host memory on large
-// historical snapshots.  Append-only uint64_t vectors followed by in-place
-// sort/unique preserve exactly the same deduplication semantics at a fraction
-// of the memory cost.
+// Packed (prefix_id, path_id) keys are deduplicated by in-place sort/unique
+// to avoid allocating one tree node per route.
 vector<uint64_t> rib_entry_keys;
 vector<uint64_t> upd_entry_keys;
 
@@ -138,7 +129,6 @@ vector<unordered_map<int32_t, HopSource>> prefix_hops;
 // Prefix -> list of (u_as_id, v_as_id, depth)
 vector<vector<tuple<int32_t, int32_t, uint8_t>>> prefix_edges;
 
-// --- Helpers ---
 
 int32_t get_or_create_prefix_id(const string& prefix) {
     auto it = prefix_to_id.find(prefix);
@@ -148,11 +138,9 @@ int32_t get_or_create_prefix_id(const string& prefix) {
     int32_t id = prefix_to_id.size();
     prefix_to_id[prefix] = id;
     id_to_prefix.push_back(prefix);
-    // Resize prefix_hops to accommodate new prefix
     if (prefix_hops.size() <= id) {
         prefix_hops.resize(id + 1);
     }
-    // Resize prefix_edges
     if (prefix_edges.size() <= id) {
         prefix_edges.resize(id + 1);
     }
@@ -170,8 +158,6 @@ int32_t get_or_create_asn_id(uint32_t asn) {
     return id;
 }
 
-// Helper to process AS Path from BGPStream
-// Returns the number of pairs extracted into the fixed buffer
 bool extract_as_path_pairs(bgpstream_elem_t* elem, FixedPath& fp, uint8_t& count) {
     if (!elem) return false;
     if (extract_as_path_info(elem, fp.pairs, count)) {
@@ -180,8 +166,6 @@ bool extract_as_path_pairs(bgpstream_elem_t* elem, FixedPath& fp, uint8_t& count
     return false;
 }
 
-// Helper to process AS Path from BGPStream
-// Returns a vector of ASNs in the path (Original for fingerprint)
 vector<uint32_t> extract_as_path(bgpstream_as_path_t* path) {
     vector<uint32_t> asns;
     if (!path) return asns;
@@ -202,7 +186,6 @@ vector<uint32_t> extract_as_path(bgpstream_as_path_t* path) {
                 first = false;
             }
         } else {
-            // Handle sets/sequences by iterating
             bgpstream_as_path_seg_set_t* set_seg = (bgpstream_as_path_seg_set_t*)seg;
             for (int i = 0; i < set_seg->asn_cnt; ++i) {
                 if (first || set_seg->asn[i] != last_asn) {
@@ -229,19 +212,14 @@ bool is_strict_linear_as_path(bgpstream_as_path_t* path) {
     return true;
 }
 
-// Core logic to process a single entry
 void process_entry(const string& prefix_str, const vector<uint32_t>& as_path, PathSource source) {
     if (as_path.empty()) return;
 
     int32_t p_id = get_or_create_prefix_id(prefix_str);
     
-    // Calculate hops and extract edges
-    // Path: [AS1, AS2, AS3, Origin]
-    // Hops: AS1->3, AS2->2, AS3->1, Origin->0    
+    // Hops count from the origin: [AS1, AS2, AS3, Origin] -> [3, 2, 1, 0].
     int path_len = as_path.size();
     
-    // Handle origin AS separately (no edges)
-    // Hop is 0 for origin AS
     {
         uint32_t origin_as = as_path[path_len - 1];
         int32_t as_id = get_or_create_asn_id(origin_as);
@@ -256,7 +234,6 @@ void process_entry(const string& prefix_str, const vector<uint32_t>& as_path, Pa
         }
     }
     
-    // Handle other ASes and extract edges
     for (int i = 0; i < path_len - 1; ++i) {
         uint8_t hop = (uint8_t)(path_len - 1 - i);
         uint32_t asn = as_path[i];
@@ -275,13 +252,11 @@ void process_entry(const string& prefix_str, const vector<uint32_t>& as_path, Pa
             }
         }
 
-        // Extract edges
         int32_t u_id = get_or_create_asn_id(as_path[i + 1]);
         prefix_edges[p_id].emplace_back(u_id, as_id, hop - 1);
     }
 }
 
-// --- File Processors ---
 bool process_mrt_file(const string& filepath) {
     const size_t initial_entries = rib_entry_keys.size();
     bgpstream_t *bs = bgpstream_create();
@@ -310,17 +285,14 @@ bool process_mrt_file(const string& filepath) {
                 uint32_t origin_as = 0;
                 int origin_result = bgpstream_as_path_get_origin_val(elem->as_path, &origin_as);
                 if (origin_result != 0) {
-                    continue; // Skip invalid AS paths
+                    continue;
                 }
 
-                // Parse prefix string
                 char prefix_str[INET6_ADDRSTRLEN + 5];
                 bgpstream_pfx_snprintf(prefix_str, sizeof(prefix_str), &elem->prefix);
                 string pfx_str(prefix_str);
-                // Get Prefix ID
                 int32_t p_id = get_or_create_prefix_id(pfx_str);
 
-                // Utilize BGPStream hash combined with origin AS to find existing path ID
                 uint64_t path_hash = ((uint64_t)origin_as << 32) | bgpstream_as_path_hash(elem->as_path);
                 int32_t path_id;
                 
@@ -331,7 +303,7 @@ bool process_mrt_file(const string& filepath) {
                     FixedPath fp;
                     uint8_t cnt;
                     if(extract_as_path_pairs(elem, fp, cnt) == false || cnt == 0) {
-                        continue; // Skip invalid or empty paths
+                        continue;
                     }
                     path_id = id_to_path_len.size();
                     id_to_fixed_path.push_back(fp);
@@ -341,7 +313,6 @@ bool process_mrt_file(const string& filepath) {
                     path_hash_to_id[path_hash] = path_id;
                 }
 
-                // Extract linear AS path only when needed
                 vector<uint32_t> as_path = extract_as_path(elem->as_path);
                 if (!as_path.empty()) {
                     const bool is_strict = is_strict_linear_as_path(elem->as_path);
@@ -564,7 +535,6 @@ void release_path_storage() {
     malloc_trim(0);
 }
 
-// --- Main ---
 
 int main(int argc, char* argv[]) {
     ios::sync_with_stdio(false);
@@ -582,7 +552,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // 1. Process RIBs
     time_t latest_rib_ts = 0;
     string rib_dir = dataset_dir + "/rib";
     if (fs::exists(rib_dir)) {
@@ -607,7 +576,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 2. Process UPD ANNOUNCE samples from the recent lookback window.
+    // Process UPD ANNOUNCE samples from the recent lookback window.
     string upd_dir = dataset_dir + "/upd";
     const time_t upd_lookback_start = latest_rib_ts > 0 ? latest_rib_ts - TRAINING_UPD_LOOKBACK_SEC : 0;
     if (fs::exists(upd_dir)) {
@@ -644,22 +613,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // These artifacts need the parsed path table but not the later profile
-    // aggregation.  Emit them now, then release path-level storage before the
-    // next memory-intensive phase.
+    // Emit path artifacts before releasing path storage for profile aggregation.
     write_rib_artifacts(output_dir);
     release_path_storage();
 
-    // 2. Aggregation (Profile Generation)
     cout << "Aggregating profiles...\n";
     
-    // Fingerprint -> Profile ID
-    // Fingerprint is a sorted vector of (AS_ID, Hop)
+    // Profiles share a sorted (AS_ID, minimum hop) vector.
     map<vector<pair<int32_t, uint8_t>>, int32_t> fingerprint_to_profile_id;
     vector<int32_t> prefix_to_profile_id(id_to_prefix.size());
     
-    // Store profile triplets for output: ProfileID -> [(AS, Hop), ...]
-    // We can just store them in a flat vector for binary output
     struct Triplet {
         int32_t profile_id;
         int32_t as_id;
@@ -671,9 +634,8 @@ int main(int argc, char* argv[]) {
     int32_t next_profile_id = 0;
     for (size_t p_id = 0; p_id < prefix_hops.size(); ++p_id) {
         const auto& hops_map = prefix_hops[p_id];
-        if (hops_map.empty()) continue; // Should not happen if logic is correct
+        if (hops_map.empty()) continue;
         
-        // Create fingerprint
         vector<pair<int32_t, uint8_t>> fingerprint;
         fingerprint.reserve(hops_map.size());
         for (const auto& kv : hops_map) {
@@ -681,7 +643,6 @@ int main(int argc, char* argv[]) {
         }
         sort(fingerprint.begin(), fingerprint.end());
         
-        // Check if profile exists
         auto it = fingerprint_to_profile_id.find(fingerprint);
         int32_t profile_id;
         
@@ -689,7 +650,6 @@ int main(int argc, char* argv[]) {
             profile_id = next_profile_id++;
             fingerprint_to_profile_id[fingerprint] = profile_id;
             
-            // Record triplets for this new profile
             for (const auto& [as_id, hop] : fingerprint) {
                 const auto it_hop = hops_map.find(as_id);
                 const PathSource src = (it_hop == hops_map.end()) ? PathSource::RIB : it_hop->second.source;
@@ -712,7 +672,6 @@ int main(int argc, char* argv[]) {
     }
     cout << "Compression Ratio: " << (double)id_to_prefix.size() / next_profile_id << "x\n";
 
-    // Aggregate edges per profile
     cout << "Aggregating edges per profile..." << '\n';
     vector<vector<tuple<int32_t, int32_t, uint8_t>>> profile_edges(next_profile_id);
     for (size_t p_id = 0; p_id < prefix_edges.size(); ++p_id) {
@@ -722,34 +681,26 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Compute fingerprint for each profile
     cout << "Computing 128-bit fingerprint for profiles..." << '\n';
     const double alpha = 0.5;
     
-    // Modify storage container: store PropFingerprint structs
     vector<PropFingerprint> profile_fingerprints(next_profile_id);
     
-    // 128-dimensional accumulator
     vector<double> accum(128); 
 
     for (int32_t prof_id = 0; prof_id < next_profile_id; ++prof_id) {
-        // Reset accumulator
         fill(accum.begin(), accum.end(), 0.0);
 
         for (const auto& [u_id, v_id, depth] : profile_edges[prof_id]) {
             double w = exp(-alpha * depth);
 
-            // 2. Generate two independent 64-bit hashes
-            // Part 1: Low 64 bits
+            // Use different hash seeds for the two 64-bit fingerprint halves.
             uint64_t h1 = (uint64_t)u_id * 6364136223846793005ULL + (uint64_t)v_id * 1442695040888963407ULL;
             
-            // Part 2: High 64 bits (using different parameters and mixing logic to ensure orthogonality)
-            uint64_t h2 = ((uint64_t)u_id ^ 0x9e3779b97f4a7c15ULL) * 0xc6a4a7935bd1e995ULL + 
+            uint64_t h2 = ((uint64_t)u_id ^ 0x9e3779b97f4a7c15ULL) * 0xc6a4a7935bd1e995ULL +
                           ((uint64_t)v_id ^ 0x5555555555555555ULL) * 0x5bd1e9955bd1e995ULL;
 
-            // 3. Update accumulator (split into two segments to avoid if-else check for k >= 64)
             
-            // Process low 64 bits (corresponding to h1)
             for (int k = 0; k < 64; ++k) {
                 if (h1 & (1ULL << k)) {
                     accum[k] += w;
@@ -758,30 +709,26 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // Process high 64 bits (corresponding to h2, indices from 64 to 127)
             for (int k = 0; k < 64; ++k) {
                 if (h2 & (1ULL << k)) {
-                    accum[k + 64] += w; // Note index offset +64
+                    accum[k + 64] += w;
                 } else {
                     accum[k + 64] -= w;
                 }
             }
         }
 
-        // 4. Generate 128-bit fingerprint
         uint64_t fp_low = 0;
         uint64_t fp_high = 0;
 
-        // Generate low 64-bit part
         for (int k = 0; k < 64; ++k) {
             if (accum[k] > 0) {
                 fp_low |= (1ULL << k);
             }
         }
 
-        // Generate high 64-bit part
         for (int k = 0; k < 64; ++k) {
-            if (accum[k + 64] > 0) { // Note index offset +64
+            if (accum[k + 64] > 0) {
                 fp_high |= (1ULL << k);
             }
         }
@@ -790,7 +737,6 @@ int main(int argc, char* argv[]) {
     }
     cout << "fingerprint computation complete." << '\n';
 
-    // 3. Output
     fs::create_directories(output_dir);
     {
         ofstream ofs(output_dir + "/as_map.txt");
@@ -810,7 +756,6 @@ int main(int argc, char* argv[]) {
     // Save Profile Triplets (Binary struct {int32, int32, uint8, float})
     {
         ofstream ofs(output_dir + "/profile_triplets.bin", ios::binary);
-        // Write count first
         uint64_t count = profile_triplets.size();
         ofs.write(reinterpret_cast<const char*>(&count), sizeof(count));
         
@@ -829,9 +774,8 @@ int main(int argc, char* argv[]) {
         ofs.write(reinterpret_cast<const char*>(ptr), profile_fingerprints.size() * sizeof(PropFingerprint));
     }
     
-    // These process-wide containers may hold hundreds of millions of entries.
-    // All output streams have been closed above, so let the OS reclaim them in
-    // one operation instead of spending minutes walking global destructors.
+    // Outputs are closed; let the OS reclaim the large containers without
+    // walking hundreds of millions of entries in global destructors.
     cout.flush();
     cerr.flush();
     std::_Exit(0);

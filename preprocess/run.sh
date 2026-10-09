@@ -132,9 +132,7 @@ DATASET_TIME_WINDOWS["rostelecom-2"]="2020-04-01 18:00:00,2020-04-01 21:00:00"
 DATASET_DIR="$(realpath "../dataset/$DATASET_INPUT")"
 RAW_DATA_BASE="${RAW_DATA_BASE_INPUT:-${RAW_DATA_BASE:-/data/parade}}"
 RAW_DATA_DIR="$RAW_DATA_BASE/$DATASET_INPUT"
-# Historical validation consumes rib_records_cache.bin directly for GraphDist
-# and never reads reference_paths.bin.  Avoid materializing that multi-GiB
-# supplemental simulation artifact in the sequential staging workspace.
+# Historical validation uses parser caches; skip the multi-GiB simulation reference.
 if [[ "$DATASET_DIR" == /data/parade_revision_history/* ]]; then
     export PARADE_SKIP_REFERENCE_PATHS=1
 fi
@@ -154,10 +152,6 @@ PROCESSOR_LOG="$LOG_DIR/processor.log"
 DOWNLOADER_PID_FILE="$PID_DIR/bgp_downloader.pid"
 PROCESSOR_PID_FILE="$PID_DIR/processor.pid"
 
-# Priority:
-# 1) explicit TIME window argument (<start>,<end>)
-# 2) dataset-specific predefined historical window
-# 3) fail fast if neither is available
 PIPELINE_START_TIME=""
 PIPELINE_END_TIME=""
 DOWNLOADER_START_TIME=""
@@ -359,9 +353,6 @@ start_all() {
         env RAW_DATA_BASE="$RAW_DATA_BASE" bash "$PARSER_DIR/run_monitor.sh" start -D "$DATASET_DIR"
     fi
 
-    # NOTE: dataset building (build_dataset.py) is now handled inline by the
-    # online orchestrator (hyperbolic_model/run_online.sh).  No separate daemon
-    # is needed here.
 
     echo "[SUCCESS] Pipeline daemons started for dataset: $DATASET_INPUT"
     echo "[INFO] Replay start time (UTC): $PIPELINE_START_TIME"

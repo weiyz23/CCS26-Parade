@@ -1,14 +1,11 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.10 FATAL_ERROR)
 project(data_processor LANGUAGES CXX C)
 
-# using C++17
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# add flags for O3 optimization and native architecture
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native -flto")
 
-# set the output directory for the executables
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 
@@ -25,7 +22,6 @@ include_directories(
 )
 
 
-# path_extractor is now a header-only library
 add_library(path_extractor INTERFACE)
 target_include_directories(path_extractor
     INTERFACE
@@ -38,7 +34,6 @@ target_link_libraries(path_extractor
     rt
 )
 
-# Data processor executable
 add_executable(data_processor
     src/data_parser.cpp
 )
@@ -52,7 +47,6 @@ target_link_libraries(data_processor
     rt
 )
 
-# Preprocessor executable
 add_executable(processor
     src/processor.cpp
 )
@@ -65,16 +59,12 @@ target_link_libraries(processor
     rt
 )
 
-# Fast read-only summary for the compact reference_paths.bin emitted by the
-# processor.  Supplemental reports use this instead of scanning the binary in
-# Python.
+# Summarize compact reference_paths.bin without scanning it in Python.
 add_executable(reference_summary
     src/reference_summary.cpp
 )
 
-# Build the GraphDist reference directly from the fixed-width parser cache.
-# This supports historical datasets produced before reference_paths.bin was
-# added, without reparsing MRT files.
+# Build graph context from older parser caches without reparsing MRT files.
 add_executable(cache_graph_context
     src/cache_graph_context.cpp
 )
@@ -83,7 +73,6 @@ target_include_directories(cache_graph_context
     include
 )
 
-# Analyzer executable
 add_executable(monitor
     src/monitor.cpp
 )
@@ -96,7 +85,6 @@ target_link_libraries(monitor
     rt
 )
 
-# print the output directory
 message(STATUS "Executable output directory: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "Data processor target: data_processor")
 message(STATUS "Processor target: processor")

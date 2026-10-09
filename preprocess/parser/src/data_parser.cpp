@@ -21,7 +21,6 @@
 
 static const char* optstring = "D:O:T:W:";
 
-// State file path
 string state_file_path = "data_parser_state.txt";
 
 struct IncrementalState {
@@ -65,10 +64,8 @@ void init_program_log_from_env(const char* env_name) {
     }
 }
 
-// Global RingBuffer manager. A smart pointer is used for simpler resource management.
 unique_ptr<LockFreeRingBufferManager> g_ringbuffer_manager;
 
-// Check whether the RIB cache exists and is valid.
 bool check_rib_cache(const string& cache_path) {
     ifstream ifs(cache_path, ios::binary);
     if (!ifs) {
@@ -95,7 +92,6 @@ bool check_rib_cache(const string& cache_path) {
     return true;
 }
 
-// Stream-load RIB cache entries into the RingBuffer.
 bool stream_rib_cache_to_ringbuffer(const string& cache_path) {
     ifstream ifs(cache_path, ios::binary);
     if (!ifs) return false;
@@ -109,23 +105,19 @@ bool stream_rib_cache_to_ringbuffer(const string& cache_path) {
     size_t current_threshold = (alignment_records == 0) ? BATCH_SIZE : alignment_records;
     
     vector<BGPRecord> batch_buffer;
-    // Reserve capacity to avoid repeated reallocations.
     batch_buffer.reserve(BATCH_SIZE);
     
     size_t processed = 0;
     while (processed < count) {
         size_t remaining = count - processed;
-        // Determine read size for this iteration: bounded by remaining records and threshold.
         size_t to_read = (remaining < current_threshold) ? remaining : current_threshold;
         
-        // Resize vector first, then read directly into the vector buffer.
         batch_buffer.resize(to_read);
         if (!ifs.read(reinterpret_cast<char*>(batch_buffer.data()), to_read * sizeof(BGPRecord))) {
             fprintf(stderr, "Failed to read from cache (expected %zu records)\n", to_read);
             return false;
         }
          
-        // Write this chunk to RingBuffer in batch mode.
         if (!write_batch_to_ringbuffer(batch_buffer, false)) {
             fprintf(stderr, "Failed to flush batch during cache streaming\n");
             return false;
@@ -142,27 +134,23 @@ bool stream_rib_cache_to_ringbuffer(const string& cache_path) {
 // Parse time string to timestamp (UTC)
 // Supports formats: timestamp, 'Y-m-d', 'Y-m-d H:M', 'Y-m-d H:M:S'
 time_t parse_time_string(const string& time_str) {
-        // Try to parse as timestamp first - check if entire string is consumed
         try {
             size_t pos;
             long long timestamp = stoll(time_str, &pos);
-            if (pos == time_str.length()) {  // Entire string was parsed as number
+            if (pos == time_str.length()) {
                     return static_cast<time_t>(timestamp);
             }
         } catch (...) {
-            // Not a valid number, continue to date parsing
         }
 
         struct tm tm_time = {};
         istringstream ss(time_str);
         string date_part, time_part;
         
-        // Split by space to get date and time parts
         if (!getline(ss, date_part, ' ')) {
             return -1;
         }
         
-        // Parse date part (YYYY-MM-DD)
         int year, month, day;
         if (sscanf(date_part.c_str(), "%d-%d-%d", &year, &month, &day) != 3) {
             return -1;
@@ -172,7 +160,6 @@ time_t parse_time_string(const string& time_str) {
         tm_time.tm_mon = month - 1;
         tm_time.tm_mday = day;
         
-        // Parse time part if exists (H:M or H:M:S)
         if (getline(ss, time_part)) {
             int hour, min, sec = 0;
             if (sscanf(time_part.c_str(), "%d:%d:%d", &hour, &min, &sec) >= 2) {
@@ -184,7 +171,6 @@ time_t parse_time_string(const string& time_str) {
         return timegm(&tm_time);
 }
 
-// Convert timestamp to readable string
 string timestamp_to_string(time_t timestamp) {
         if (timestamp == LLONG_MAX) {
             return "unlimited";
@@ -206,7 +192,6 @@ time_t parse_start_time_param(const string& time_arg) {
         return time(nullptr);
     }
 
-    // Backward compatibility: allow legacy start,end input and only use start.
     string start_part = time_arg;
     size_t comma_pos = time_arg.find(',');
     if (comma_pos != string::npos) {
@@ -266,7 +251,6 @@ string format_data_timestamp_key(time_t ts) {
     return string(buffer);
 }
 
-// Helper function to process files in a directory
 void process_directory(string dir_path, 
                     unordered_map<time_t, vector<string>> *rib_files,
                     unordered_map<time_t, vector<string>> *upd_files,
@@ -289,7 +273,6 @@ void process_directory(string dir_path,
         }
         file_path += filename;
         
-        // Try to parse as RIB file
         if (check_rib) {
             int rib_res = extract_timestamp_rrc(filename, timestamp, rrc_id, 0);
             if (rib_res == 0) {
@@ -304,7 +287,6 @@ void process_directory(string dir_path,
             }
         }
         
-        // Try to parse as UPD file
         if (check_upd) {
             int upd_res = extract_timestamp_rrc(filename, timestamp, rrc_id, 1);
             if (upd_res == 0) {
@@ -320,7 +302,6 @@ void process_directory(string dir_path,
     }
 }
 
-// Get the files in the data directory, then group the files by the time
 // file_type: 0 = rib only, 1 = upd only, 2 = both
 int get_files_in_data_dir(string data_dir,
                         unordered_map<time_t, vector<string>> *rib_files,
@@ -408,7 +389,7 @@ time_t floor_to_ripe_rib_slot(time_t ts) {
 // Maximum allowed rollback from startup anchor when selecting a previous baseline.
 // Set DATA_PARSER_BASELINE_MAX_BACKTRACK_SEC <= 0 to disable the rollback limit.
 time_t get_baseline_max_backtrack_seconds() {
-    const time_t default_limit = 36 * 60 * 60;  // 36h
+    const time_t default_limit = 36 * 60 * 60;
     const char* env = getenv("DATA_PARSER_BASELINE_MAX_BACKTRACK_SEC");
     if (!env || env[0] == '\0') {
         return default_limit;
@@ -1131,7 +1112,6 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    // Online mode with baseline switching.
     // Producer writes: [BASELINE_SWITCH_AF] -> RIB cache -> STAGE_END_AF -> UPD batches.
     time_t current_baseline_ts = 0;
     string processed_data_dir = dataset_dir + "/processed_data";
@@ -1205,7 +1185,6 @@ int main(int argc, char *argv[]) {
                 current_baseline_ts = candidate_prev;
                 break;
             }
-            // Fallback when no previous baseline exists.
             time_t candidate_next = find_earliest_complete_aligned_baseline_ge(processed_data_dir, baseline_target_slot);
             if (candidate_next > 0) {
                 current_baseline_ts = candidate_next;

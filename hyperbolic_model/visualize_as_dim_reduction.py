@@ -12,7 +12,6 @@ import umap
 from pathlib import Path
 from tqdm import tqdm
 
-# Import model
 try:
     from model import HyperbolicRoutingModel
 except ImportError:
@@ -21,26 +20,19 @@ except ImportError:
 
 warnings.filterwarnings("ignore")
 
-# Set global font to serif family (prioritizing Times New Roman)
 plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
 plt.rcParams['axes.facecolor'] = 'white'
 plt.rcParams['figure.facecolor'] = 'white'
 
-# ==========================================
-# 0. Constant definitions
-# ==========================================
 
 TIER1_ASNS = {
-    "701", "1299", "2914", "3257", "3320", "3356", "3491", 
+    "701", "1299", "2914", "3257", "3320", "3356", "3491",
     "5511", "6453", "6461", "6762", "6830", "7018", "12956"
 }
 
 AS_PATH_COLOR = "#d62728"
 
-# ==========================================
-# 1. Core math tools
-# ==========================================
 
 def get_poincare_distance_matrix(model, x_tensor, max_dist=15.0):
     if x_tensor.device.type != 'cpu':
@@ -55,7 +47,7 @@ def get_poincare_distance_matrix(model, x_tensor, max_dist=15.0):
 def get_hyperbolic_radius(model, embeddings):
     if isinstance(embeddings, np.ndarray):
         embeddings = torch.from_numpy(embeddings)
-    zeros = torch.zeros_like(embeddings) 
+    zeros = torch.zeros_like(embeddings)
     with torch.no_grad():
         embeddings = embeddings.to(model.as_embedding.device)
         zeros = zeros.to(model.as_embedding.device)
@@ -230,16 +222,13 @@ def draw_as_path_overlay(ax, data, path_overlay, is_3d=False, annotate=True):
                 zorder=32,
             )
 
-# ==========================================
-# 2. Auto region search algorithm
-# ==========================================
 
 def find_best_zoom_region(data, highlight_groups, search_box_size=0.04, min_points=4, view_padding=0.03):
     candidate_indices = []
     tier3_indices = set()
     transit_indices = set()
     stub_indices = set()
-    
+
     for group in highlight_groups:
         name = group['name'].lower()
         if "1000-5000" in name:
@@ -251,38 +240,37 @@ def find_best_zoom_region(data, highlight_groups, search_box_size=0.04, min_poin
         elif "15000+" in name:
             stub_indices.update(group['indices'])
             candidate_indices.extend(group['indices'])
-            
+
     if not candidate_indices:
         return None
-        
+
     candidate_indices = np.unique(candidate_indices)
-    
-    # Pre-calculate category masks relative to candidate_indices
+
     is_tier3 = np.array([idx in tier3_indices for idx in candidate_indices])
     is_transit = np.array([idx in transit_indices for idx in candidate_indices])
     is_stub = np.array([idx in stub_indices for idx in candidate_indices])
-    
+
     candidate_points = data[candidate_indices]
-    
+
     best_count = 0
     best_center = None
     r = search_box_size / 2.0
-    
+
     for p in candidate_points:
         x_min, x_max = p[0] - r, p[0] + r
         y_min, y_max = p[1] - r, p[1] + r
-        
+
         in_x = (candidate_points[:, 0] >= x_min) & (candidate_points[:, 0] <= x_max)
         in_y = (candidate_points[:, 1] >= y_min) & (candidate_points[:, 1] <= y_max)
         in_region = in_x & in_y
-        
+
         count = np.sum(in_region)
-        
-        # Check diversity constraint: must contain at least one of each type
+
+        # The zoom region must contain every highlighted category.
         has_tier3 = np.any(in_region & is_tier3)
         has_transit = np.any(in_region & is_transit)
         has_stub = np.any(in_region & is_stub)
-        
+
         if has_tier3 and has_transit and has_stub:
             if count > best_count:
                 best_count = count
@@ -292,14 +280,11 @@ def find_best_zoom_region(data, highlight_groups, search_box_size=0.04, min_poin
         print(f"    [Auto-Zoom] Found region with {best_count} points.")
         final_half_size = (search_box_size / 2.0) + view_padding
         cx, cy = best_center
-        return (cx - final_half_size, cx + final_half_size, 
+        return (cx - final_half_size, cx + final_half_size,
                 cy - final_half_size, cy + final_half_size)
     else:
         return None
 
-# ==========================================
-# 3. Plotting engine
-# ==========================================
 
 def create_custom_cmap():
     colors = [
@@ -325,12 +310,12 @@ def plot_embedding(
     as_path_overlay=None,
 ):
     fig = plt.figure(figsize=(10, 10), facecolor='white')
-    
-    custom_cmap = create_custom_cmap()    
+
+    custom_cmap = create_custom_cmap()
     radii_flat = radii.flatten()
     base_filename = str(filename).rsplit('.', 1)[0]
     ext = ".png"
-    
+
     if is_3d:
         ax = fig.add_subplot(111, projection='3d')
         if draw_boundary:
@@ -339,35 +324,31 @@ def plot_embedding(
             ys = np.sin(u)*np.sin(v)
             zs = np.cos(v)
             ax.plot_wireframe(xs, ys, zs, color="#dddddd", alpha=0.3, linewidth=0.5)
-            ax.set_axis_off() 
+            ax.set_axis_off()
         else:
             ax.grid(False)
         ax.scatter(data[:, 0], data[:, 1], data[:, 2], c=radii_flat, cmap=custom_cmap, vmin=0.0, vmax=1.0, s=8, alpha=0.8)
         if highlight_groups:
             for group in highlight_groups:
                 idx = group["indices"]
-                if len(idx)>0: 
+                if len(idx)>0:
                     ax.scatter(data[idx,0], data[idx,1], data[idx,2], marker=group["marker"], color=group["color"], s=group["s"], edgecolors='black', linewidth=0.5, zorder=20)
         draw_as_path_overlay(ax, data, as_path_overlay, is_3d=True)
         plt.savefig(filename, dpi=200)
         plt.close()
         return
 
-    # --- 2D Mode ---
-    # 1. Global (Base plot)
     fig, ax = plt.subplots(figsize=(10, 10), facecolor='white')
     ax.set_aspect('equal')
-    
+
     if draw_boundary:
         wedge = patches.Wedge((0, 0), 1.0, 0, 180, fill=False, color='black', linewidth=1.5, alpha=0.8)
         ax.add_artist(wedge)
-        # Draw diameter (horizontal axis)
         ax.plot([-1, 1], [0, 0], color='black', linewidth=1.5, alpha=0.8)
-        
-        # Draw prefix space boundary (r=0.35)
+
         prefix_wedge = patches.Wedge((0, 0), 0.35, 0, 180, fill=False, color='#636363', linestyle='--', linewidth=1.5, alpha=0.8)
         ax.add_artist(prefix_wedge)
-        
+
         ax.set_xlim([-1.05, 1.05])
         ax.set_ylim([-1.05, 1.05])
         ax.axis('off')
@@ -375,8 +356,7 @@ def plot_embedding(
         ax.axis('on'); ax.grid(True, linestyle=':', alpha=0.2)
 
     scatter = ax.scatter(data[:, 0], data[:, 1], c=radii_flat, cmap=custom_cmap, vmin=0.0, vmax=1.0, s=8, alpha=0.7, edgecolors='none')
-    
-    # Origin
+
     ax.scatter(0, 0, c='black', marker='o', s=60, edgecolors='white', linewidth=1.5, zorder=25)
 
     if highlight_groups:
@@ -388,11 +368,10 @@ def plot_embedding(
     draw_as_path_overlay(ax, data, as_path_overlay, annotate=True)
 
     plt.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
-    
+
     print(f"  Saving: {base_filename}_Global{ext}")
     plt.savefig(f"{base_filename}_Global{ext}", dpi=200)
 
-    # Create separate horizontal colorbar
     fig_cbar, ax_cbar = plt.subplots(figsize=(12, 1), facecolor='white')
     mappable = plt.cm.ScalarMappable(cmap=custom_cmap, norm=plt.Normalize(vmin=0.0, vmax=1.0))
     cbar = plt.colorbar(mappable, ax=ax_cbar, orientation='horizontal', shrink=1.0, aspect=40)
@@ -405,7 +384,6 @@ def plot_embedding(
     plt.close(fig_cbar)
     print(f"  Saving: {base_filename}_Colorbar{ext}")
 
-    # Create separate legend
     if highlight_groups:
         handles, labels = ax.get_legend_handles_labels()
         fig_legend, ax_legend = plt.subplots(figsize=(4, 3), facecolor='white')
@@ -415,63 +393,57 @@ def plot_embedding(
         plt.close(fig_legend)
         print(f"  Saving: {base_filename}_Legend{ext}")
 
-    # 2. Boxed
     if zoom_rect is not None:
         x1, x2, y1, y2 = zoom_rect
         width, height = x2 - x1, y2 - y1
         rect = patches.Rectangle((x1, y1), width, height, linewidth=2.0, edgecolor='#41ab5d', facecolor='none', zorder=30)
         ax.add_patch(rect)
-        
+
         print(f"  Saving: {base_filename}_Boxed{ext}")
         plt.savefig(f"{base_filename}_Boxed{ext}", dpi=200)
-        
+
     plt.close(fig)
 
-    # 3. Detail (Local zoomed view)
     if zoom_rect is not None:
         x1, x2, y1, y2 = zoom_rect
         fig_z, ax_z = plt.subplots(figsize=(6, 6), facecolor='white')
         ax_z.set_facecolor('#f0f9e8')
-        
+
         ax_z.scatter(data[:, 0], data[:, 1], c=radii_flat, cmap=custom_cmap, vmin=0.0, vmax=1.0, s=40, alpha=0.9, edgecolors='none')
-        
-        # Origin in Detail view
+
         ax_z.scatter(0, 0, c='black', marker='o', s=80, edgecolors='white', linewidth=1.5, zorder=25)
         ax_z.text(0.02, 0.02, 'Origin', fontsize=12, color='black', fontweight='bold', ha='left', va='bottom', zorder=25)
-        
+
         prefix_wedge_z = patches.Wedge((0, 0), 0.35, 0, 180, fill=False, color='#636363', linestyle='--', linewidth=1.5, alpha=0.6, zorder=10)
         ax_z.add_artist(prefix_wedge_z)
-        
+
         if highlight_groups:
             for group in highlight_groups:
                 idx = group["indices"]
                 if len(idx) > 0:
-                    sc = ax_z.scatter(data[idx, 0], data[idx, 1], marker=group["marker"], color=group["color"], s=group["s"]*2.8, edgecolors='black', linewidth=1.5, zorder=20, label=group["name"])            
+                    sc = ax_z.scatter(data[idx, 0], data[idx, 1], marker=group["marker"], color=group["color"], s=group["s"]*2.8, edgecolors='black', linewidth=1.5, zorder=20, label=group["name"])
 
         draw_as_path_overlay(ax_z, data, as_path_overlay, annotate=True)
-        
+
         ax_z.set_xlim(x1, x2)
         ax_z.set_ylim(y1, y2)
-        
+
         for spine in ax_z.spines.values():
             spine.set_edgecolor('#41ab5d'); spine.set_linewidth(3.0)
         ax_z.set_xticks([]); ax_z.set_yticks([])
-        
+
         plt.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
-        
+
         print(f"  Saving: {base_filename}_Detail{ext}")
         plt.savefig(f"{base_filename}_Detail{ext}", dpi=200, pad_inches=0)
         plt.close(fig_z)
 
-# ==========================================
-# 4. Main process
-# ==========================================
 
 def run_grid_search(args, max_samples=15000):
     device = torch.device("cpu")
     viz_dir = args.viz_dir / "grid_search"
     viz_dir.mkdir(parents=True, exist_ok=True)
-    
+
     with open(args.data_dir / "meta.json", "r") as f: meta = json.load(f)
     as_map = torch.load(args.data_dir / "as_map.pt")
     as_path = parse_as_path(args.as_path)
@@ -485,21 +457,20 @@ def run_grid_search(args, max_samples=15000):
         print(f"Resolved {len(path_force_indices)}/{len(as_path)} unique ASNs from the path.")
         if missing_path_asns:
             print(f"Warning: ASNs not found in as_map.pt: {', '.join(missing_path_asns)}")
-        
+
     model = HyperbolicRoutingModel(
-        num_as=meta["num_asns"], num_profiles=meta["num_profiles"], 
+        num_as=meta["num_asns"], num_profiles=meta["num_profiles"],
         embed_dim=args.embed_dim, num_vectors=args.num_vectors
     ).to(device)
-    
+
     model_path = args.model_dir / "best_model.pth"
     if not model_path.exists(): raise FileNotFoundError(f"Model checkpoint not found")
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
-    
+
     full_emb = model.as_embedding.detach()
     full_radii = get_hyperbolic_radius(model, full_emb).flatten()
-    
-    # --- Sampling ---
+
     global_tier1_indices = []
     for asn_str in TIER1_ASNS:
         idx = None
@@ -507,54 +478,49 @@ def run_grid_search(args, max_samples=15000):
         elif int(asn_str) in as_map: idx = as_map[int(asn_str)]
         if idx is not None: global_tier1_indices.append(idx)
     target_tier1_set = set(global_tier1_indices)
-    
-    # Calculate finer percentiles for stratified sampling
+
     p02, p1, p1_5, p3, p4_5, p6, p15 = np.percentile(full_radii, [0.2, 1.0, 1.5, 3.0, 4.5, 6, 15])
-    
-    # Define Main Pools (for compatibility with highlighting)
+
     pool_02_15 = np.where((full_radii >= p02) & (full_radii < p1_5))[0]
     pool_15_6 = np.where((full_radii >= p1_5) & (full_radii < p6))[0]
     pool_6_15 = np.where((full_radii >= p6) & (full_radii < p15))[0]
     pool_15_100 = np.where(full_radii >= p15)[0]
-    
-    # Define Sub-Pools for Stratified Sampling
+
     pool_02_10 = np.where((full_radii >= p02) & (full_radii < p1))[0]
     pool_10_15 = np.where((full_radii >= p1) & (full_radii < p1_5))[0]
-    
+
     pool_15_30 = np.where((full_radii >= p1_5) & (full_radii < p3))[0]
     pool_30_45 = np.where((full_radii >= p3) & (full_radii < p4_5))[0]
     pool_45_60 = np.where((full_radii >= p4_5) & (full_radii < p6))[0]
-    
+
     N_total = full_emb.shape[0]
     print(f"Sampling data (Target: {max_samples})...")
-    
+
     stratum_1 = np.array(global_tier1_indices, dtype=int)
-    
-    # --- Stratum 2: Tier-2 (0.2-1.5%) ---
+
     # Split into 0.2-1.0 and 1.0-1.5, ensure balanced sampling
     sub_02_10 = np.setdiff1d(pool_02_10, stratum_1)
     sub_10_15 = np.setdiff1d(pool_10_15, stratum_1)
-    
+
     s2_1 = np.random.choice(sub_02_10, min(len(sub_02_10), 50), replace=False)
     s2_2 = np.random.choice(sub_10_15, min(len(sub_10_15), 50), replace=False)
     stratum_2 = np.concatenate([s2_1, s2_2])
-    
-    # --- Stratum 3: Tier-3 (1.5-6%) ---
+
     # Split into 1.5-3, 3-4.5, 4.5-6
     sel_so_far = np.concatenate([stratum_1, stratum_2])
-    
+
     sub_15_30 = np.setdiff1d(pool_15_30, sel_so_far)
     sub_30_45 = np.setdiff1d(pool_30_45, sel_so_far)
     sub_45_60 = np.setdiff1d(pool_45_60, sel_so_far)
-    
+
     s3_1 = np.random.choice(sub_15_30, min(len(sub_15_30), 166), replace=False)
     s3_2 = np.random.choice(sub_30_45, min(len(sub_30_45), 167), replace=False)
     s3_3 = np.random.choice(sub_45_60, min(len(sub_45_60), 167), replace=False)
-    
+
     stratum_3 = np.concatenate([s3_1, s3_2, s3_3])
 
     base_sel = np.unique(np.concatenate([stratum_1, stratum_2, stratum_3, path_force_indices]))
-    
+
     if N_total > max_samples:
         mask = np.ones(N_total, dtype=bool)
         mask[base_sel] = False
@@ -564,68 +530,61 @@ def run_grid_search(args, max_samples=15000):
         final_indices = np.concatenate([base_sel, stratum_4])
     else:
         final_indices = np.arange(N_total)
-        
+
     np.random.shuffle(final_indices)
     data_subset = full_emb[final_indices]
-    
-    # --- Highlight Groups ---
+
     orig_to_local = { int(orig): loc for loc, orig in enumerate(final_indices) }
     as_path_overlay = build_as_path_overlay(path_records, orig_to_local, full_radii)
     if as_path and len(as_path_overlay) < len(as_path):
         print(f"Warning: only {len(as_path_overlay)}/{len(as_path)} AS path hops can be plotted.")
     highlight_groups = []
-    
-    # Tier-1
+
     t1_valid_orig = [x for x in target_tier1_set if x in orig_to_local]
     if t1_valid_orig:
-        # User Rule: Remove the Tier-1 node with the largest radius (likely an outlier or misclassification)
+        # Omit the largest-radius Tier-1 point from the highlight overlay.
         max_r_node = max(t1_valid_orig, key=lambda x: full_radii[x])
         t1_valid_orig.remove(max_r_node)
 
     local_t1 = [orig_to_local[x] for x in t1_valid_orig]
     if local_t1:
         highlight_groups.append({"name": "Top-tier", "indices": np.array(local_t1), "marker": "*", "color": "#2171b5", "s": 180})
-        
-    # Tier-2 (0.3-1.5%)
+
     pool_2_valid = [x for x in pool_02_15 if x in orig_to_local and x not in target_tier1_set]
     if pool_2_valid:
         count = min(len(pool_2_valid), 10)
         cands = sorted(pool_2_valid, key=lambda x: full_radii[x])[:count]
         highlight_groups.append({"name": "Rank < 1000", "indices": np.array([orig_to_local[x] for x in cands]), "marker": "s", "color": "#41ab5d", "s": 120})
 
-    # Tier-3 (1.5-7%)
     pool_3_valid = [x for x in pool_15_6 if x in orig_to_local and x not in target_tier1_set]
     if pool_3_valid:
         count = min(len(pool_3_valid), 20)
         cands = sorted(pool_3_valid, key=lambda x: full_radii[x])[:count]
         highlight_groups.append({"name": "Rank 1000-5000", "indices": np.array([orig_to_local[x] for x in cands]), "marker": "D", "color": "#feb24c", "s": 110})
 
-    # Transit (7-20%)
     pool_4_valid = [x for x in pool_6_15 if x in orig_to_local and x not in target_tier1_set]
     if pool_4_valid:
         count = min(len(pool_4_valid), 30)
         cands = sorted(pool_4_valid, key=lambda x: full_radii[x])[:count]
         highlight_groups.append({"name": "Rank 5000-15000", "indices": np.array([orig_to_local[x] for x in cands]), "marker": "o", "color": "#ffeda0", "s": 110})
 
-    # Stub (20-100%)
     pool_5_valid = [x for x in pool_15_100 if x in orig_to_local]
     if pool_5_valid:
         cands = np.random.choice(pool_5_valid, min(len(pool_5_valid), 50), replace=False)
         highlight_groups.append({"name": "Rank 15000+", "indices": np.array([orig_to_local[x] for x in cands]), "marker": "^", "color": "#bdbdbd", "s": 110})
 
-    # --- Normalization & Distance Calculation ---
     raw_norms_tensor = torch.norm(data_subset, p=2, dim=1, keepdim=True)
     if raw_norms_tensor.max() >= 1.0:
         data_subset = data_subset / (raw_norms_tensor.max() + 1e-5) * 0.9999
     raw_norms_np = raw_norms_tensor.numpy()
-    
+
     print("Pre-computing distance matrices...")
     dist_matrix_hyp = get_poincare_distance_matrix(model, data_subset)
-    
+
     dims = [2]
     methods = ["UMAP"]
     output_styles = ["Poincare"]
-    
+
     pbar = tqdm(total=len(dims)*len(methods)*len(output_styles))
 
     for dim in dims:
@@ -639,32 +598,32 @@ def run_grid_search(args, max_samples=15000):
             for out_style in output_styles:
                 final_data = embedding_result
                 draw_boundary = False
-                zoom_roi = None 
+                zoom_roi = None
 
                 if out_style == "Poincare":
                     final_data = apply_radial_preserving(embedding_result, raw_norms_np)
                     draw_boundary = True
-                    
+
                     if dim == 2:
                         zoom_roi = find_best_zoom_region(
-                            final_data, 
-                            highlight_groups, 
-                            search_box_size=0.03, 
+                            final_data,
+                            highlight_groups,
+                            search_box_size=0.03,
                             min_points=4,
-                            view_padding=0.02 
+                            view_padding=0.02
                         )
                         if zoom_roi: print(f"    Target ROI: {zoom_roi}")
 
                 else:
                     final_data = embedding_result
                     draw_boundary = False
-                
+
                 fname = f"{dim}D_{method}_Out-{out_style}.png"
                 title = f"{dim}D {method} | Output: {out_style}"
-                
+
                 plot_embedding(
-                    final_data, raw_norms_np, 
-                    title, viz_dir / fname, 
+                    final_data, raw_norms_np,
+                    title, viz_dir / fname,
                     is_3d=False, draw_boundary=draw_boundary,
                     highlight_groups=highlight_groups,
                     zoom_rect=zoom_roi,

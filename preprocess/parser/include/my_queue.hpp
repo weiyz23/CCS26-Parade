@@ -10,12 +10,7 @@
 
 using namespace std;
 
-/*
- * High-performance thread-safe work queue
- * - Supports blocking enqueue and dequeue operations
- * - Provides detailed statistics
- * - Supports graceful shutdown
- */
+// Bounded blocking queue; shutdown wakes waiting producers and consumers.
 template<typename T>
 class MyQueue {
 private:
@@ -71,7 +66,6 @@ public:
             queue_.pop();
             total_dequeued_.fetch_add(1, memory_order_relaxed);
 
-            // Notify producer that queue has space
             cv_not_full_.notify_one();
 
             auto end_time = chrono::high_resolution_clock::now();
@@ -125,12 +119,7 @@ public:
     }
 };
 
-/*
- * High-performance thread-safe priority queue
- * - Supports blocking enqueue and dequeue operations, sorted by priority
- * - Provides detailed statistics
- * - Supports graceful shutdown
- */
+// Bounded blocking priority queue with shutdown wakeups.
 template<typename T, typename Comparator = less<T>>
 class PriorityMyQueue {
 private:
@@ -186,7 +175,6 @@ public:
             pq_.pop();
             total_dequeued_.fetch_add(1, memory_order_relaxed);
 
-            // Notify producer that queue has space
             cv_not_full_.notify_one();
 
             auto end_time = chrono::high_resolution_clock::now();

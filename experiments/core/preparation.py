@@ -1,5 +1,3 @@
-"""Prepare the fixed paper snapshot and monthly AS metadata on demand."""
-
 from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime, timedelta
 import json
@@ -28,7 +26,6 @@ def validate_training_data(data_dir):
 
 
 def prepare_as_metadata(date, dataset_dir, cache_root):
-    # Use the existing monthly CAIDA query, with strict pagination and atomic publication.
     from preprocess.download_history_data import download_as_rank_data
 
     month = date[:7]
@@ -45,7 +42,6 @@ def prepare_as_metadata(date, dataset_dir, cache_root):
                 prior = {}
             valid_cache = prior.get("month") == month and prior.get("sha256") == sha256(cached)
         if not valid_cache:
-            # Only this helper's cache is replaced; a partially downloaded file is never published.
             pending = cache_dir / "download.jsonl"
             pending.unlink(missing_ok=True)
             download_as_rank_data(date, pending, strict=True)
@@ -132,7 +128,7 @@ def prepare_snapshot(data_dir, raw_root, log_path):
                 if not path.is_file() or path.stat().st_size == 0:
                     raise RuntimeError(f"Empty or missing snapshot RIB: {path}")
                 item.update(path=str(path), bytes=path.stat().st_size)
-        # Isolate the exact collector set from any unrelated raw files or UPDATEs.
+        # Include only the selected snapshot collectors.
         selected = raw_dir / "selected" / "rib"
         selected.mkdir(parents=True, exist_ok=True)
         for old in selected.iterdir():
@@ -142,8 +138,7 @@ def prepare_snapshot(data_dir, raw_root, log_path):
         for item in inventory:
             path = Path(item["path"])
             (selected / path.name).symlink_to(path.resolve())
-        # The builder reuses tensors by filename. Invalidate only its known generated files
-        # before rebuilding an incomplete or changed managed snapshot.
+        # Invalidate generated tensors when snapshot inputs change.
         for name in SNAPSHOT_FILES + ("upd_counts.pt",):
             (data_dir / name).unlink(missing_ok=True)
         processor = ROOT / "preprocess" / "parser" / "bin" / "processor"

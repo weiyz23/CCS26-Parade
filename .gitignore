@@ -23,11 +23,9 @@ filter/
 # Build, distribution and misc files
 build/
 bin/
-test/
 log/
 experiments/results/
 .pids
-test.*
 
 # IDE
 .vscode/

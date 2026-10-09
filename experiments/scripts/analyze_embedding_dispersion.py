@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""Embedding dispersion analysis for euclidean/hyperbolic k-sweeps.
-
-Tasks:
-1) Distribution of semantic distances for randomly sampled AS pairs (>= 1M by default).
-2) Distribution of nearest-neighbor distances for randomly sampled anchor ASes (>= 10K by default).
-3) Distribution of semantic distances among ASes in the first 3 propagation layers of a random prefix.
-
-Outputs:
-- Three boxplot figures (one per task) faceted by k.
-- Summary CSV files with count/mean/median/IQR/P90/P95.
-- Run metadata JSON (seed, source, rank strategy, sampled prefix, etc.).
-"""
-
 from __future__ import annotations
 
 import argparse

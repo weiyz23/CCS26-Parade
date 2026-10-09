@@ -28,26 +28,17 @@
 
 using namespace std;
 
-/*
- * Fine-grained concurrent BGP Consumer implementation
- * - Uses sharded lock mechanism for concurrent-safe graph, significantly reducing lock contention
- * - Supports higher concurrency and better performance scalability
- * - Main thread: reads BGP records from RingBuffer
- * - Worker thread pool: processes BGP records and updates graph structure
- * - Monitoring thread: periodically outputs statistics and detects anomalies
- */
+// Ring-buffer records are dispatched to graph-update workers; detection runs separately.
 
-constexpr size_t CHECK_FREQ = 50; // Check frequency
-constexpr size_t DEFAULT_WORKER_THREAD_COUNT = 16; // Default worker thread count
-constexpr size_t DEFAULT_ANOMALY_THREAD_COUNT = 12; // Default anomaly detection thread count
-constexpr auto RETRY_INTERVAL_BUSY_MS = chrono::microseconds(10); // Busy wait retry interval time
-constexpr auto RETRY_INTERVAL_IDLE_MS = chrono::microseconds(1); // Idle wait retry interval time
+constexpr size_t CHECK_FREQ = 50;
+constexpr size_t DEFAULT_WORKER_THREAD_COUNT = 16;
+constexpr size_t DEFAULT_ANOMALY_THREAD_COUNT = 12;
+constexpr auto RETRY_INTERVAL_BUSY_MS = chrono::microseconds(10);
+constexpr auto RETRY_INTERVAL_IDLE_MS = chrono::microseconds(1);
 constexpr time_t DEFAULT_IP_LEASING_MIN_QUIET_SECONDS = 12 * 60 * 60; // 12h quiet period after withdrawal.
 constexpr time_t DEFAULT_IP_LEASING_STATE_RETENTION_SECONDS = 180LL * 24 * 60 * 60; // 180d retention for prefix state.
-// Global log file pointer
 FILE* g_monitor_log = nullptr;
 
-// Prefix information structure
 struct PrefixInfo {
     bool is_ipv4;
     union {
@@ -58,17 +49,15 @@ struct PrefixInfo {
     string prefix_str;
 };
 
-// Work task structure - use fixed-size array for better performance
 struct WorkBatch {
-    array<BGPRecord, BATCH_SIZE> records;  // Fixed-size array
-    size_t actual_size;  // Actual number of valid records
+    array<BGPRecord, BATCH_SIZE> records;
+    size_t actual_size;
     uint64_t batch_id;
     chrono::high_resolution_clock::time_point enqueue_time;
-    ProcessingPhase phase;  // Processing phase
+    ProcessingPhase phase;
     
     WorkBatch() : actual_size(0), batch_id(0), phase(ProcessingPhase::RIB_PHASE) {}
     
-    // Construct from external array
     WorkBatch(const BGPRecord* data, size_t size, uint64_t id, ProcessingPhase batch_phase) 
         : actual_size(size), batch_id(id), phase(batch_phase), enqueue_time(chrono::high_resolution_clock::now()) {
         if (size > 0 && size <= BATCH_SIZE) {
@@ -76,13 +65,11 @@ struct WorkBatch {
         }
     }
     
-    // Get span view of valid data
     const BGPRecord* data() const { return records.data(); }
     size_t size() const { return actual_size; }
     bool empty() const { return actual_size == 0; }
 };
 
-// Fine-grained concurrent graph updater
 class AsyncGraphUpdater {
 private:
     struct PrefixLeaseState {
@@ -105,7 +92,6 @@ private:
     atomic<size_t> total_processing_time_ns_{0};
     atomic<uint64_t> active_workers_{0};
     
-    // Anomaly detection support
     TopologyAnalyzer* anomaly_processor_{nullptr};
     mutable mutex lease_state_mutex_;
     unordered_map<Prefix, PrefixLeaseState> lease_state_;
@@ -218,7 +204,6 @@ private:
         return tagged_prefixes;
     }
     
-    // Worker thread function
     void workerLoop(int worker_id) {
         WorkBatch batch;
         while (running_.load(memory_order_relaxed) || work_queue_.size() > 0) {
@@ -232,7 +217,6 @@ private:
                 auto processing_time = chrono::duration_cast<chrono::nanoseconds>(end_time - start_time);
                 auto queue_wait_time = chrono::duration_cast<chrono::milliseconds>(start_time - batch.enqueue_time);
                 
-                // Update statistics
                 processed_batches_.fetch_add(1, memory_order_relaxed);
                 processed_records_.fetch_add(batch.size(), memory_order_relaxed);
                 total_processing_time_ns_.fetch_add(static_cast<size_t>(processing_time.count()), memory_order_relaxed);
@@ -241,18 +225,15 @@ private:
         }
     }
     
-    // Batch process BGP records
     void processBGPRecordsBatch(const WorkBatch& batch) {
         if (batch.empty()) return;
         
         size_t batch_size = batch.size();
         
-        // Pre-aggregation data structures
         unordered_map<ASPair, unordered_map<Prefix, pair<time_t, uint32_t>>> updates;
         unordered_map<uint32_t, unordered_set<uint32_t>> as_neighbors; 
         updates.reserve(2 * batch_size);
         
-        // Process each record and aggregate data
         for (size_t i = 0; i < batch_size; ++i) {
             const BGPRecord& record = batch.data()[i];
             if (record.as_pair_count == 0) continue;
@@ -279,9 +260,7 @@ private:
         // Update leasing state from both phases so UPD starts with warmed active-peer view.
         unordered_set<Prefix> ip_leasing_prefixes = detectIpLeasingPrefixes(batch);
 
-        // Decide whether to perform anomaly detection based on phase
         if (batch.phase == ProcessingPhase::UPD_PHASE) {
-            // Collect prefixes carrying a blackhole community in this batch.
             unordered_set<Prefix> blackhole_prefixes;
             for (size_t i = 0; i < batch_size; ++i) {
                 const BGPRecord& record = batch.data()[i];
@@ -290,7 +269,6 @@ private:
                 }
             }
 
-            // Batch update and get new links
             time_t default_ts = batch.data()[batch_size - 1].timestamp;
             auto new_links = graph_.updateASLinksAndGetNew(move(updates));
             PrefixAnomalyBatch anomaly_batch(default_ts, batch.batch_id,
@@ -307,7 +285,6 @@ private:
                 anomaly_processor_->submitPrefixLinkBatch(move(anomaly_batch));
             }
         } else {
-            // RIB phase: only update graph structure, no anomaly detection
             graph_.updateASLinks(move(updates));
         }
     }
@@ -316,7 +293,6 @@ public:
     explicit AsyncGraphUpdater(PrefixPropGraph& graph, int num_workers = 8, TopologyAnalyzer* anomaly_processor = nullptr) 
         : graph_(graph), anomaly_processor_(anomaly_processor) {
         
-        // Start worker threads
         for (int i = 0; i < num_workers; i++) {
             worker_threads_.emplace_back(&AsyncGraphUpdater::workerLoop, this, i);
         }
@@ -383,7 +359,6 @@ public:
 };
 
 size_t read_aligned_batch_concurrent(LockFreeRingBufferManager& manager, BGPRecord* buffer) {
-    // Get alignment information
     size_t alignment_records = manager.get_read_alignment_records_needed();
     size_t target_read_size = (alignment_records == 0) ? BATCH_SIZE : alignment_records;
     
@@ -401,7 +376,6 @@ static inline bool is_control_marker_record(const BGPRecord& rec) {
     return rec.origin_as == 0 && rec.peer_asn == 0 && rec.as_pair_count == 0;
 }
 
-// Display help information
 void print_help(const char* program_name) {
     printf("Usage: %s [OPTIONS]\n", program_name);
     printf("\nOptions:\n");
@@ -423,7 +397,6 @@ void print_help(const char* program_name) {
     printf("\n");
 }
 
-// Parse command line arguments
 struct Config {
     size_t parser_threads;
     size_t anomaly_threads;
@@ -495,10 +468,8 @@ Config parse_arguments(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
-    // Parse command line arguments
     Config config = parse_arguments(argc, argv);
     
-    // Initialize monitor log file
     g_monitor_log = fopen(config.monitor_log_file.c_str(), "w");
     if (!g_monitor_log) {
         fprintf(stderr, "Error: Failed to open monitor log file: %s\n", config.monitor_log_file.c_str());
@@ -510,25 +481,20 @@ int main(int argc, char* argv[]) {
     fprintf(g_monitor_log, "Initializing Fine-Grained Concurrent BGP Consumer...\n");
     fprintf(g_monitor_log, "Configuration: %zu parser threads, %zu anomaly threads\n", config.parser_threads, config.anomaly_threads);
     
-    // Use fine-grained concurrent-safe graph structure
     PrefixPropGraph graph(1000000, 200000, 100000, 800000);
     
-    // Wait for producer
     fprintf(g_monitor_log, "Fine-Grained Consumer waiting for producer...\n");
     while (!manager.init_consumer()) {
         this_thread::sleep_for(chrono::milliseconds(100));
     }
     
-    // Start anomaly detection processor
     string full_csv_path = config.csv_filename;
     TopologyAnalyzer anomaly_detector(graph, config.anomaly_threads, 1200000, full_csv_path.c_str());
-    // Start fine-grained asynchronous graph updater
     AsyncGraphUpdater graph_updater(graph, config.parser_threads, &anomaly_detector);
     
     fprintf(g_monitor_log, "Fine-Grained Consumer started with %zu parser threads.\n", config.parser_threads);
     fprintf(g_monitor_log, "================================================================================\n");
     
-    // Main loop
     uint64_t record_count = 0;
     int empty_reads = 0;
     uint64_t last_record_count = 0;
@@ -540,7 +506,6 @@ int main(int argc, char* argv[]) {
     ProcessingPhase current_phase = ProcessingPhase::RIB_PHASE;
     fprintf(g_monitor_log, "Concurrent Consumer initialized in RIB processing phase\n");
     
-    // Use fixed-size array instead of vector to avoid dynamic resize overhead
     auto read_buffer = make_unique<array<BGPRecord, BATCH_SIZE>>();
         
     const auto stats_print_interval = chrono::seconds(3);
@@ -571,7 +536,7 @@ int main(int argc, char* argv[]) {
                     current_phase = ProcessingPhase::UPD_PHASE;
                     fprintf(g_monitor_log, "=== RIB END SIGNAL RECEIVED - Switching to UPDATE phase ===\n");
                 } else {
-                    current_phase = ProcessingPhase::RIB_PHASE; // Reset for potential future use
+                    current_phase = ProcessingPhase::RIB_PHASE;
                     fprintf(g_monitor_log, "=== UPDATE END SIGNAL RECEIVED - All processing completed ===\n");
                 }
             }
@@ -616,7 +581,6 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    // Wait for processing to complete
     fprintf(g_monitor_log, "Waiting for all fine-grained async tasks to complete...\n");
     while (!graph_updater.isIdle()) {
         this_thread::sleep_for(RETRY_INTERVAL_BUSY_MS);
@@ -639,7 +603,6 @@ int main(int argc, char* argv[]) {
     }
     
     auto final_updater_stats = graph_updater.getStats();
-    // Anomaly detection processor final statistics are managed by independent threads
     fprintf(g_monitor_log, "\n=== Graph Updater Final Statistics ===\n");
     fprintf(g_monitor_log, "Processed: %lu batches, %lu records\n", 
            final_updater_stats.processed_batches, final_updater_stats.processed_records);
@@ -655,7 +618,6 @@ int main(int argc, char* argv[]) {
     
     auto final_graph_stats = graph.getGlobalStats();
     
-    // Print memory usage statistics for graph data structure
     size_t graph_memory_mb = graph.getMemoryUsage() / 1024 / 1024;
     size_t snapshot_memory_mb = anomaly_detector.getMemoryUsage() / 1024 / 1024;
     size_t total_memory_mb = graph_memory_mb + snapshot_memory_mb;
@@ -665,24 +627,19 @@ int main(int argc, char* argv[]) {
     fprintf(g_monitor_log, "Snapshot memory usage: %zu MB\n", snapshot_memory_mb);
     fprintf(g_monitor_log, "Total memory usage: %zu MB\n", total_memory_mb);
     
-    // Shut down all asynchronous components
     graph_updater.shutdown();
 
     fprintf(g_monitor_log, "Shutting down Anomaly Detector (finishing queue processing and saving results)...\n");
     anomaly_detector.shutdown();
     fprintf(g_monitor_log, "Fine-Grained Consumer finished.\n");
     
-    // Close log
     if (g_monitor_log) {
         fclose(g_monitor_log);
         g_monitor_log = nullptr;
     }
 
-    // All externally visible work is complete at this point: asynchronous
-    // workers are stopped, anomaly records are persisted, and the log is
-    // closed.  Explicitly release the shared ring-buffer mappings, then avoid
-    // spending minutes destructing the very large in-memory graph one node at
-    // a time.  The operating system reclaims the remaining private memory.
+    // Workers are stopped and outputs closed. Release ring-buffer mappings,
+    // then let the OS reclaim the large graph without per-node destruction.
     manager.cleanup();
     fflush(nullptr);
     std::_Exit(EXIT_SUCCESS);

@@ -12,7 +12,6 @@ extern "C" {
 
 class BGPStreamParser {
 public:
-    // Filter type enumeration
     enum class FilterType {
         PROJECT,
         COLLECTOR,
@@ -26,7 +25,6 @@ public:
         RESOURCE_TYPE
     };
 
-    // Data interface type
     enum class DataInterface {
         SINGLEFILE,
         BROKER,
@@ -75,7 +73,6 @@ public:
         }
     }
 
-    // Streaming configuration interface
     BGPStreamParser& set_data_interface(DataInterface di) {
         data_interface_ = di;
         return *this;
@@ -117,20 +114,16 @@ public:
         return *this;
     }
 
-    // Initialize BGPStream
     bool initialize() {
         try {
-            // Set data interface
             bgpstream_set_data_interface(stream_.get(), convert_data_interface(data_interface_));
 
-            // Add filter
             for (const auto& [type, value] : filters_) {
                 if (!bgpstream_add_filter(stream_.get(), convert_filter_type(type), value.c_str())) {
                     throw std::runtime_error("Failed to add filter: " + value);
                 }
             }
 
-            // Set interface options
             for (const auto& [key, value] : interface_options_) {
                 auto option = bgpstream_get_data_interface_option_by_name(
                     stream_.get(), convert_data_interface(data_interface_), key.c_str());
@@ -142,19 +135,16 @@ public:
                 }
             }
 
-            // Set time interval
             if (interval_start_ != 0) {
                 if (!bgpstream_add_interval_filter(stream_.get(), interval_start_, interval_end_)) {
                     throw std::runtime_error("Failed to set time interval");
                 }
             }
 
-            // Set live mode
             if (live_mode_) {
                 bgpstream_set_live_mode(stream_.get());
             }
 
-            // Start stream
             if (bgpstream_start(stream_.get()) < 0) {
                 throw std::runtime_error("Failed to start BGPStream");
             }
@@ -166,7 +156,6 @@ public:
         }
     }
 
-    // Callback interface for parsing records
     template<typename RecordCallback>
     int parse_records(RecordCallback&& callback) {
         bgpstream_record_t* record = nullptr;
@@ -191,7 +180,6 @@ public:
         return count;
     }
 
-    // Get statistics
     void print_info() const {
         printf("BGPStream Parser Configuration:\n");
         printf("  Data Interface: %d\n", static_cast<int>(data_interface_));
@@ -203,7 +191,6 @@ public:
     }
 };
 
-// Convenience function, Builder class rewritten with C++ logic
 class BGPStreamParserBuilder {
 private:
     BGPStreamParser::DataInterface data_interface_ = BGPStreamParser::DataInterface::SINGLEFILE;
@@ -256,11 +243,9 @@ public:
         return *this;
     }
 
-    // Build and return configured parser
     std::unique_ptr<BGPStreamParser> build() {
         auto parser = std::make_unique<BGPStreamParser>();
         
-        // Apply all configurations
         parser->set_data_interface(data_interface_);
         
         for (const auto& [type, value] : filters_) {
@@ -286,7 +271,6 @@ public:
         return parser;
     }
 
-    // Convenient static methods
     static BGPStreamParserBuilder for_rib_file(const std::string& filepath) {
         return BGPStreamParserBuilder().set_rib_file(filepath);
     }

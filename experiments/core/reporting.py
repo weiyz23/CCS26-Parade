@@ -1,5 +1,3 @@
-"""Export training measurements without inventing missing CPU/GPU statistics."""
-
 import math
 
 from .runtime import write_csv

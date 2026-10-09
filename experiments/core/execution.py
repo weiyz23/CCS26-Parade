@@ -1,5 +1,3 @@
-"""Experiment orchestration; training and detection stay in their existing modules."""
-
 from contextlib import redirect_stderr, redirect_stdout
 import copy
 import math
@@ -7,6 +5,8 @@ import os
 from pathlib import Path
 import sys
 import time
+
+from hyperbolic_model.run_visualizations import run_visualizations
 
 from .preparation import prepare_as_metadata, prepare_snapshot, validate_training_data
 from .runtime import CONFIGS, ROOT, ensure_parser, exclusive_lock, read_json, run_logged, write_csv, write_json
@@ -35,11 +35,13 @@ def run_main(events, raw_root, output_dir, *, dry_run=False):
             log_path = output_dir / event["dataset"] / "run.log"
             log_path.parent.mkdir(parents=True, exist_ok=True)
             row = dict(event, status="running", seconds=None, log=str(log_path),
-                       results=str(dataset_dir / "results"), model=str(dataset_dir / "saved_models"), error="")
+                       results=str(dataset_dir / "results"), model=str(dataset_dir / "saved_models"), error="",
+                       visualization_status="not_run", visualization_error="")
             env = os.environ.copy()
             env["RAW_DATA_BASE"] = str(raw_root)
             env["PARADE_LOG_DIR"] = str(log_path.parent / "pipeline")
             env["SKIP_PIPELINE_DETECTION"] = "0"
+            env["SKIP_PIPELINE_VISUALIZATION"] = "1"
             env["MPLBACKEND"] = "Agg"
             write_json(log_path.parent / "run_config.json", {
                 "event": event, "command": command, "raw_data_base": str(raw_root),
@@ -61,12 +63,26 @@ def run_main(events, raw_root, output_dir, *, dry_run=False):
                 row.update(status="failed", error=str(exc))
                 with log_path.open("a") as log:
                     log.write(f"\nAE FAILURE: {exc}\n")
+            if row["status"] == "complete":
+                try:
+                    visualization = run_visualizations(
+                        dataset_dir, dataset_dir / "saved_models", dataset_dir / "visualizations",
+                        int(env.get("EMBEDDING_DIM", 24)), int(env.get("NUM_VECTORS", 2)),
+                        env=env, log_path=log_path)
+                    row.update(visualization_status=visualization["status"],
+                               visualization_error=visualization["error"])
+                except Exception as exc:
+                    row.update(visualization_status="failed", visualization_error=str(exc))
+                    with log_path.open("a") as log:
+                        log.write(f"\nOPTIONAL VISUALIZATION FAILURE: {exc}\n")
             row["seconds"] = time.monotonic() - started
             rows.append(row)
             write_json(output_dir / "summary.json", rows)
             write_csv(output_dir / "summary.csv", rows,
-                      ["dataset", "label", "category", "start_utc", "end_utc", "status", "seconds", "log", "results", "model", "error"])
-            print(f"{event['dataset']}: {row['status']} ({row['seconds']:.1f}s)", flush=True)
+                      ["dataset", "label", "category", "start_utc", "end_utc", "status", "seconds", "log", "results", "model", "error",
+                       "visualization_status", "visualization_error"])
+            print(f"{event['dataset']}: {row['status']} ({row['seconds']:.1f}s), "
+                  f"visualization: {row['visualization_status']}", flush=True)
     return int(any(row["status"] != "complete" for row in rows))
 
 

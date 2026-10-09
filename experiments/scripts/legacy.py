@@ -1,5 +1,3 @@
-"""Compatibility dispatch for the original positional experiment entry point."""
-
 import argparse
 from pathlib import Path
 import sys

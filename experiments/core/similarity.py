@@ -2,7 +2,7 @@ import torch
 
 
 def unpack_128bit_to_binary(tensor_n_2: torch.Tensor) -> torch.Tensor:
-    """Unpack (N, 2) int64 tensors (128-bit SimHash) into (N, 128) binary float vectors."""
+    """Unpack (N, 2) int64 SimHash words into (N, 128) bits."""
     device = tensor_n_2.device
     mask = 1 << torch.arange(63, -1, -1, device=device)
     high = tensor_n_2[:, 0].unsqueeze(1)
@@ -13,7 +13,7 @@ def unpack_128bit_to_binary(tensor_n_2: torch.Tensor) -> torch.Tensor:
 
 
 def compute_affinity(fp_a: torch.Tensor, fp_b: torch.Tensor) -> torch.Tensor:
-    """Compute normalized Hamming similarity in [0, 1]."""
+    """Raw Hamming affinity: 1 - differing bits / length."""
     hamming_dist = torch.sum(torch.abs(fp_a - fp_b), dim=-1)
     length = fp_a.size(-1)
     similarity = 1.0 - (hamming_dist / length)
@@ -21,6 +21,6 @@ def compute_affinity(fp_a: torch.Tensor, fp_b: torch.Tensor) -> torch.Tensor:
 
 
 def recalibrate_affinity(raw_sim: torch.Tensor, baseline: float = 0.50) -> torch.Tensor:
-    """Re-scale raw similarity so near-baseline noise maps close to zero."""
+    """Paper affinity: clip((raw - baseline) / (1 - baseline), 0, 1)."""
     val = (raw_sim - baseline) / (1.0 - baseline)
     return torch.clamp(val, min=0.0, max=1.0)

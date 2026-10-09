@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Public AE CLI. Heavy dependencies are imported only after argument parsing."""
-
 import argparse
 import os
 from pathlib import Path

@@ -6,22 +6,14 @@ from pathlib import Path
 import argparse
 import sys
 
-# Append path to ensure we can import model
 sys.path.append(str(Path(__file__).parent))
 from model import HyperbolicRoutingModel
 
-# Percentile Defaults (sigma-based logic)
-PERC_POS_HIGH_SIGMA = 99.95     # (Positive distrib)
-PERC_NEG_LOW_SIGMA = 1.6        # (Negative distrib)
+PERC_POS_HIGH_SIGMA = 99.95
+PERC_NEG_LOW_SIGMA = 1.6
 
 def find_min_error_threshold(pos_dists, neg_dists, n_grid=10000):
-    """
-    Find threshold that minimizes (false_positive_rate + false_negative_rate).
-    Decision rule: distance < threshold => predict positive.
-    pos_dists: distances for true positives (numpy array)
-    neg_dists: distances for true negatives (numpy array)
-    Returns: threshold (float) or None if inputs invalid, and a small stats dict.
-    """
+    """Minimize empirical FPR + FNR for distances at or below the positive threshold."""
     pos = np.asarray(pos_dists)
     neg = np.asarray(neg_dists)
     if pos.size == 0 or neg.size == 0:
@@ -30,11 +22,11 @@ def find_min_error_threshold(pos_dists, neg_dists, n_grid=10000):
     pos_sorted = np.sort(pos)
     neg_sorted = np.sort(neg)
 
-    # Optimization: Only attempt exact unique values if total size is manageable.
+    # Use an exact grid when the combined sample is small.
     combined_size = pos.size + neg.size
     thresholds = None
 
-    if combined_size <= 100000:  
+    if combined_size <= 100000:
         try:
             combined = np.unique(np.concatenate([pos_sorted, neg_sorted]))
             if combined.size <= n_grid:
@@ -47,21 +39,20 @@ def find_min_error_threshold(pos_dists, neg_dists, n_grid=10000):
         hi = float(max(pos_sorted[-1], neg_sorted[-1]))
         thresholds = np.linspace(lo, hi, n_grid)
 
-    # Empirical CDFs via searchsorted
     pos_counts = np.searchsorted(pos_sorted, thresholds, side='right')
     neg_counts = np.searchsorted(neg_sorted, thresholds, side='right')
 
     cdf_pos = pos_counts / pos_sorted.size  # P(D <= t | positive)
     cdf_neg = neg_counts / neg_sorted.size  # P(D <= t | negative)
 
-    fnr = 1.0 - cdf_pos  # false negative rate (missed positives)
-    fpr = cdf_neg        # false positive rate (negatives predicted positive)
+    fnr = 1.0 - cdf_pos
+    fpr = cdf_neg
 
     errs = fnr + fpr
     idx = int(np.argmin(errs))
     best_t = float(thresholds[idx])
     stats = {'fnr': float(fnr[idx]), 'fpr': float(fpr[idx]), 'error_sum': float(errs[idx])}
-        
+
     return best_t, stats
 
 class ThresholdCalculator:
@@ -83,59 +74,49 @@ class ThresholdCalculator:
         self.seed = int(seed)
         self.update_data_meta = bool(update_data_meta)
 
-        # Threshold calibration contains bounded random negative sampling.  A
-        # fixed seed makes independent learned spaces directly reproducible
-        # without consulting any downstream detection result.
+        # Seed the negative samples used for calibration.
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.seed)
-        
-        # Resources
+
         self.model = None
         self.as_map = None
         self.triplets = None
         self.triplets_df = None
-        
-        # Embeddings
+
         self.as_emb = None
         self.prof_emb = None
         self.fingerprints = None
-        
-        # Output
+
         self.calculated_thresholds = {}
 
         self._load_resources()
 
     def _load_resources(self):
-        # Meta
         with open(self.data_dir / "meta.json", "r") as f:
             self.meta = json.load(f)
-            
-        # AS Map
+
         self.as_map = torch.load(self.data_dir / "as_map.pt")
-        
-        # Model
+
         self.model = HyperbolicRoutingModel(
-            num_as=self.meta["num_asns"], 
-            num_profiles=self.meta["num_profiles"], 
-            embed_dim=self.embed_dim, 
+            num_as=self.meta["num_asns"],
+            num_profiles=self.meta["num_profiles"],
+            embed_dim=self.embed_dim,
             num_vectors=self.num_vectors
         ).to(self.device)
-        
+
         model_path = self.model_dir / "best_model.pth"
         if model_path.exists():
             self.model.load_state_dict(torch.load(model_path, map_location=self.device))
         else:
             raise FileNotFoundError(f"Model checkpoint not found at {model_path}")
-            
+
         self.model.eval()
-        
-        # Embeddings (Keep on Device)
+
         self.as_emb = self.model.as_embedding.detach()
         self.prof_emb = self.model.profile_embedding.detach()
-        
-        # Triplets
+
         triplets_path = self.data_dir / "profile_triplets.pt"
         if triplets_path.exists():
             self.triplets = torch.load(triplets_path, map_location=self.device)
@@ -159,17 +140,13 @@ class ThresholdCalculator:
                 self.triplets_df = pd.DataFrame(trips_cpu, columns=['pid', 'aid', 'hop'])
 
     def _calc_dist_indices(self, idx_a, idx_b, emb_a, emb_b, batch_size=8192):
-        """
-        Compute distance between embeddings indexed by idx_a and idx_b.
-        Batches the indexing to avoid OOM on GPU.
-        """
+        """Batch indexed embedding distances and minimize over profile vectors."""
         res = []
-        # Ensure indices are on the correct device for slicing and valid dtype for indexing
         if isinstance(idx_a, np.ndarray):
             idx_a = torch.from_numpy(idx_a).to(self.device)
         elif isinstance(idx_a, torch.Tensor) and idx_a.device != self.device:
             idx_a = idx_a.to(self.device)
-            
+
         if isinstance(idx_b, np.ndarray):
             idx_b = torch.from_numpy(idx_b).to(self.device)
         elif isinstance(idx_b, torch.Tensor) and idx_b.device != self.device:
@@ -179,25 +156,25 @@ class ThresholdCalculator:
             idx_a = idx_a.to(dtype=torch.long)
         if torch.is_tensor(idx_b) and idx_b.dtype != torch.long:
             idx_b = idx_b.to(dtype=torch.long)
-            
+
         with torch.no_grad():
             for i in range(0, len(idx_a), batch_size):
                 b_idx_a = idx_a[i:i+batch_size]
                 b_idx_b = idx_b[i:i+batch_size]
-                
+
                 b_a = emb_a[b_idx_a]
                 b_b = emb_b[b_idx_b]
-                
+
                 if b_a.dim() == 3 and b_b.dim() == 2:
                     b_b = b_b.unsqueeze(1)
                 elif b_a.dim() == 2 and b_b.dim() == 3:
                     b_a = b_a.unsqueeze(1)
-                    
+
                 d = self.model.manifold.dist(b_a, b_b)
-                
+
                 if d.dim() > 1:
                     d, _ = d.min(dim=1)
-                
+
                 res.append(d.cpu())
         return torch.cat(res).numpy()
 
@@ -206,40 +183,37 @@ class ThresholdCalculator:
             print("No triplets data found.")
             return
 
-        # Positive (Hop < 8)
         mask_pos = (self.triplets[:, 2] < 8)
         pos_triplets = self.triplets[mask_pos]
         pos_pids = pos_triplets[:, 0].to(dtype=torch.long)
         pos_aids = pos_triplets[:, 1].to(dtype=torch.long)
-        # Use batched index lookup to avoid OOM
         pos_dists = self._calc_dist_indices(
             pos_pids,
             pos_aids,
             self.prof_emb,
             self.as_emb
         )
-        
-        # Negative
-        n_neg = min(len(pos_dists), 10000000) # Limit neg samples
+
+        n_neg = min(len(pos_dists), 10000000)
         neg_pids = torch.randint(0, len(self.prof_emb), (n_neg,), device=self.device)
         neg_aids = torch.randint(0, len(self.as_emb), (n_neg,), device=self.device)
-        
+
         neg_dists = self._calc_dist_indices(
             neg_pids,
             neg_aids,
             self.prof_emb,
             self.as_emb
         )
-        
+
         t1, stats1 = find_min_error_threshold(pos_dists, neg_dists)
         t1_pos_sigma = float(np.percentile(pos_dists, PERC_POS_HIGH_SIGMA))
         t1_neg_sigma = float(np.percentile(neg_dists, PERC_NEG_LOW_SIGMA))
-        
+
         t1_err = t1 if t1 is not None else t1_pos_sigma
 
-        # Logic: max(others) but capped at Neg -2sigma
+        # Cap the positive/error threshold at the negative 1.6th percentile.
         t1_final = min(t1_neg_sigma, max(t1_pos_sigma, t1_err))
-        
+
         self.calculated_thresholds['threshold_profile_as'] = t1_final
         self.calculated_thresholds['threshold_profile_as_details'] = {
             'pos_sigma': t1_pos_sigma,
@@ -247,7 +221,6 @@ class ThresholdCalculator:
             'min_err': t1_err
         }
 
-        # Origin (Hop == 0)
         mask_origin = (self.triplets[:, 2] == 0)
         origin_triplets = self.triplets[mask_origin]
         if len(origin_triplets) > 0:
@@ -259,16 +232,15 @@ class ThresholdCalculator:
                 self.prof_emb,
                 self.as_emb
             )
-            # Use same negatives
             t2, stats2 = find_min_error_threshold(origin_dists, neg_dists)
             t2_pos_sigma = float(np.percentile(origin_dists, PERC_POS_HIGH_SIGMA))
             t2_neg_sigma = float(np.percentile(neg_dists, PERC_NEG_LOW_SIGMA))
-            
+
             t2_err = t2 if t2 is not None else t2_neg_sigma
-            
-            # Logic: max(others) but capped at Neg -2sigma
+
+            # Cap the positive/error threshold at the negative 1.6th percentile.
             t2_final = min(t2_neg_sigma, max(t2_pos_sigma, t2_err))
-            
+
             self.calculated_thresholds['threshold_profile_origin'] = t2_final
             self.calculated_thresholds['threshold_profile_origin_details'] = {
                 'pos_sigma': t2_pos_sigma,
@@ -276,51 +248,46 @@ class ThresholdCalculator:
                 'min_err': t2_err
             }
         else:
-             # Basic fallback if no origin data
              self.calculated_thresholds['threshold_profile_origin'] = 4.0
              self.calculated_thresholds['threshold_profile_origin_details'] = {}
 
-        # Reuse logic from visualize.py
         origin_df = self.triplets_df[self.triplets_df['hop'] == 0]
         pid_to_origins = origin_df.groupby('pid')['aid'].apply(list).to_dict()
         pid_to_associated = self.triplets_df.groupby('pid')['aid'].apply(set).to_dict()
-        
+
         valid_pids = [p for p in pid_to_origins.keys() if p in pid_to_associated]
-        # Use a reasonable sample size for threshold calc
-        MAX_SAMPLES = 100000 
+        MAX_SAMPLES = 100000
         if len(valid_pids) > MAX_SAMPLES:
             sampled_pids = np.random.choice(valid_pids, MAX_SAMPLES, replace=False)
         else:
             sampled_pids = valid_pids
-            
+
         assoc_dists = []
         unrelated_dists = []
-        
+
         as_emb_device = self.as_emb.to(self.device)
         num_as = len(self.as_emb)
-        
+
         for pid in sampled_pids:
             origins = pid_to_origins[pid]
             associated = list(pid_to_associated[pid])
             if not origins: continue
-            
+
             origin_vecs = as_emb_device[origins]
-            
-            # Associated
+
             if associated:
                 assoc_vecs = as_emb_device[associated]
                 with torch.no_grad():
                     dists = self.model.manifold.dist(assoc_vecs.unsqueeze(1), origin_vecs.unsqueeze(0))
                     min_dists, _ = dists.min(dim=1)
                     assoc_dists.extend(min_dists.cpu().numpy())
-            
-            # Unrelated (Sampled) - Fewer per PID for speed, but aggregate is large
-            needed = 25 
-            candidates_pool = np.random.randint(0, num_as, needed * 5) 
+
+            needed = 25
+            candidates_pool = np.random.randint(0, num_as, needed * 5)
             unrelated_indices = [c for c in candidates_pool if c not in pid_to_associated[pid]]
             if len(unrelated_indices) > needed:
                 unrelated_indices = unrelated_indices[:needed]
-            
+
             if unrelated_indices:
                 unrelated_vecs = as_emb_device[unrelated_indices]
                 with torch.no_grad():
@@ -331,16 +298,16 @@ class ThresholdCalculator:
         if len(assoc_dists) > 0 and len(unrelated_dists) > 0:
             t3, stats3 = find_min_error_threshold(assoc_dists, unrelated_dists)
             t3_neg_sigma = float(np.percentile(unrelated_dists, PERC_NEG_LOW_SIGMA))
-            t3_pos_sigma = float(np.percentile(assoc_dists, PERC_POS_HIGH_SIGMA)) 
-            
+            t3_pos_sigma = float(np.percentile(assoc_dists, PERC_POS_HIGH_SIGMA))
+
             t3_err = t3 if t3 is not None else t3_neg_sigma
 
-            # Logic: max(others) but capped at Neg -2sigma
+            # Cap the positive/error threshold at the negative 1.6th percentile.
             t3_final = min(t3_neg_sigma, max(t3_pos_sigma, t3_err))
 
             self.calculated_thresholds['threshold_as_origin'] = t3_final
             self.calculated_thresholds['threshold_as_origin_details'] = {
-                'pos_sigma': t3_pos_sigma, 
+                'pos_sigma': t3_pos_sigma,
                 'neg_sigma': t3_neg_sigma,
                 'min_err': t3_err
             }
@@ -359,7 +326,7 @@ class ThresholdCalculator:
             with open(meta_path, "w") as f:
                 json.dump(meta, f, indent=4)
 
-        # Also persist thresholds with the model version directory to support online multi-model inference.
+        # Keep thresholds with each model version.
         self.model_dir.mkdir(parents=True, exist_ok=True)
         with open(self.model_dir / "thresholds.json", "w") as f:
             json.dump(self.calculated_thresholds, f, indent=4)
@@ -377,7 +344,7 @@ if __name__ == "__main__":
         help="Write thresholds.json only under model_dir; leave data/meta.json unchanged.",
     )
     args = parser.parse_args()
-    
+
     calc = ThresholdCalculator(
         args.data_dir,
         args.model_dir,

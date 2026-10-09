@@ -1,4 +1,3 @@
-"""Run geometry comparison with explicit shared data and path overrides."""
 import argparse
 from pathlib import Path
 import sys

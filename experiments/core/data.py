@@ -10,8 +10,6 @@ from .similarity import unpack_128bit_to_binary
 
 
 class CompactSampler:
-    """GPU sampler for profile->AS triplets with compressed indexing."""
-
     def __init__(self, triplets_tensor: torch.Tensor, num_profiles: int, device: torch.device):
         t0 = time.time()
         sorted_indices = torch.argsort(triplets_tensor[:, 0])

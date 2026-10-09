@@ -6,8 +6,6 @@ LEAK_PROB = 0.20
 
 
 class ParadeLoss(nn.Module):
-    """Geometry-agnostic PARADE loss used by both hyperbolic and euclidean models."""
-
     def __init__(self, hier_margin: float = 1.0, rank_weight: float = 0.2, sim_margin: float = 4.0):
         super().__init__()
         self.hier_margin = hier_margin

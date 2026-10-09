@@ -100,11 +100,8 @@ int main(int argc, char** argv) {
                     if (record.origin_as != 0) {
                         origins.insert(record.origin_as);
                     } else {
-                        // Older parser caches left origin_as unset.  Its path
-                        // extractor orients each link away from the origin, so
-                        // the origin is a source: it occurs as from_as and
-                        // never as to_as.  For example, 1.0.0.0/24 yields
-                        // AS13335 as this endpoint at every collector.
+                        // Older caches omit origin_as. Links point away from the origin,
+                        // which occurs as from_as but never as to_as.
                         bool found_source = false;
                         for (uint8_t pair_index = 0; pair_index < pair_count; ++pair_index) {
                             const uint32_t candidate = record.as_pairs[pair_index].from_as;

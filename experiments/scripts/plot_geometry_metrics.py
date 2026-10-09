@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility plotting entry point using the shared AE metric reporter."""
+"""Plot completed training metrics."""
 
 import argparse
 from pathlib import Path
@@ -26,7 +26,7 @@ def collect_rows(runs_dir):
         metrics = read_json(metrics_file)
         row = {key: metrics.get(key) for key in FIELDS}
         row.update(run=model_dir.name, model_dir=str(model_dir), status="complete", error="")
-        # Older manifests omitted the seed. Keep that measurement explicitly unknown.
+        # Missing legacy seeds remain unknown.
         row["seed"] = metrics.get("seed", "unknown")
         rows.append(row)
     return rows

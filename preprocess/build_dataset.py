@@ -22,7 +22,6 @@ class EfficientAnchorBuilder:
             device=device,
         )
         
-        # Mask for unpacking (1, 1, 64)
         self.bit_mask = (1 << torch.arange(63, -1, -1, device=device)).unsqueeze(0).unsqueeze(0)
 
     def _unpack_batch(self, packed_tensor):
@@ -56,20 +55,16 @@ class EfficientAnchorBuilder:
         return self.byte_popcount[byte_values.long()].sum(dim=-1)
 
     def _cluster_matrix_mode(self, unique_packed):
-        """
-        Matrix Mode: Fast for small N.
-        Computes N*N distance matrix.
-        """
+        """Select anchors with a pairwise Hamming-distance matrix."""
         dists = self._packed_hamming(
             unique_packed.unsqueeze(1), unique_packed.unsqueeze(0)
         )
         coverage_matrix = dists <= self.max_hamming_dist
-        del dists # Free memory immediately
+        del dists
 
         selected_indices = []
         covered_mask = torch.zeros(unique_packed.size(0), dtype=torch.bool, device=self.device)
         
-        # Greedy Selection
         while not covered_mask.all():
             if len(selected_indices) >= self.max_anchors:
                 break
@@ -80,16 +75,12 @@ class EfficientAnchorBuilder:
             leader_idx = remaining[0].item()
             selected_indices.append(leader_idx)
             
-            # Mask neighbors
             covered_mask |= coverage_matrix[leader_idx]
             
         return unique_packed[selected_indices].cpu()
 
     def _cluster_iterative_mode(self, unique_packed):
-        """
-        Iterative Mode: Low memory for Large N.
-        Never computes N*N. Computes N * K (K <= 1024).
-        """
+        """Select anchors without an N-by-N distance matrix."""
         n_unique = unique_packed.size(0)
         covered_mask = torch.zeros(n_unique, dtype=torch.bool, device=self.device)
         selected_indices = []
@@ -118,21 +109,19 @@ class EfficientAnchorBuilder:
         return unique_packed[selected_indices].cpu()
 
 def build_dataset(output_dir: Path, seed: int = 42):
-    # Anchor selection uses a randomized traversal order.  Fixing it makes
-    # preprocessing benchmarks and regenerated detector caches reproducible.
+    # Seed the randomized anchor traversal for reproducible caches.
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    # If anchor cache exists, skip heavy anchor rebuild but still refresh light artifacts.
+    # Reuse existing fingerprint anchors while refreshing history and metadata.
     skip_anchor_rebuild = (output_dir / "fingerprint_anchor_db.pt").exists()
     if skip_anchor_rebuild:
         print(f"Found existing anchor cache at {output_dir}. Will refresh UPD stats and metadata only.")
 
     prefix_map_pt = output_dir / "prefix_map.pt"
     
-    # Variables that need to be populated for Stage 2
     df_triplets = None
     as_map = None
     prefix_map = None
@@ -162,19 +151,16 @@ def build_dataset(output_dir: Path, seed: int = 42):
     if prefix_map_pt.exists():
         print(f"Found {prefix_map_pt}. Skipping Stage 1 (Binary -> PT)...")
         
-        # Load maps
         with (output_dir / "as_map.pt").open("rb") as f:
             as_map = torch.load(f)
             
         with (output_dir / "prefix_map.pt").open("rb") as f:
             prefix_map = torch.load(f)
 
-        # Load triplets
         triplets_tensor = torch.load(output_dir / "profile_triplets.pt")
         if not torch.is_tensor(triplets_tensor) or triplets_tensor.dim() != 2 or triplets_tensor.size(1) < 4:
             raise ValueError("profile_triplets.pt must have columns [profile_id, as_id, hop, weight]. Rebuild the dataset tensors.")
 
-        # Convert to numpy and then DataFrame
         # Tensor columns: [profile_id, as_id, hop, weight]
         triplets_arr = triplets_tensor.numpy()
         df_triplets = pd.DataFrame(triplets_arr[:, :4], columns=['pid', 'aid', 'hop', 'weight'])
@@ -182,7 +168,6 @@ def build_dataset(output_dir: Path, seed: int = 42):
         num_profiles = int(df_triplets['pid'].max()) + 1
         
     else:
-        # 1. Load Maps
         with (output_dir / "prefix_map.txt").open("r") as f:
             prefix_list = [line.strip() for line in f]
         prefix_map = {p: i for i, p in enumerate(prefix_list)}
@@ -194,10 +179,8 @@ def build_dataset(output_dir: Path, seed: int = 42):
         print(f"Num Prefixes: {len(prefix_map)}")
         print(f"Num ASNs: {len(as_map)}")
         
-        # 2. Load Prefix -> Profile ID
         prefix_to_profile_id = np.fromfile(output_dir / "prefix_to_profile.bin", dtype=np.int32)
         
-        # 3. Load Profile Triplets
         with (output_dir / "profile_triplets.bin").open("rb") as f:
             count_bytes = f.read(8)
             count = struct.unpack("Q", count_bytes)[0]
@@ -224,14 +207,13 @@ def build_dataset(output_dir: Path, seed: int = 42):
         weights = triplets_np['weight'].astype(np.float32)
         triplets_tensor = torch.from_numpy(np.column_stack([p_ids, a_ids, hops, weights]))
             
-        # 4. Load Profile Fingerprints (128-bit, stored as pairs of uint64)
+        # Fingerprints are 128 bits, stored as two uint64 values.
         profile_fingerprints_raw = np.fromfile(output_dir / "profile_fingerprints.bin", dtype=np.uint64)
         # Reshape to (num_profiles, 2) since each fingerprint is low + high
         num_profiles_fp = len(profile_fingerprints_raw) // 2
         profile_fingerprints = profile_fingerprints_raw.reshape(num_profiles_fp, 2)
         profile_fingerprints_tensor = torch.from_numpy(profile_fingerprints.astype(np.int64))
             
-        # Save    
         with (output_dir / "prefix_map.pt").open("wb") as f:
             torch.save(prefix_map, f)
         with (output_dir / "as_map.pt").open("wb") as f:
@@ -239,25 +221,18 @@ def build_dataset(output_dir: Path, seed: int = 42):
             
         torch.save(triplets_tensor, output_dir / "profile_triplets.pt")
         
-        # Save Prefix -> Profile Mapping (Tensor)
         # Index is prefix_id, Value is profile_id
         prefix_to_profile_tensor = torch.from_numpy(prefix_to_profile_id).long()
         torch.save(prefix_to_profile_tensor, output_dir / "prefix_to_profile.pt")
 
-        # Save Profile Fingerprints
         torch.save(profile_fingerprints_tensor, output_dir / "profile_fingerprints.pt")
         
-        # Prepare for Stage 2
         df_triplets = pd.DataFrame(triplets_np)
         df_triplets = df_triplets[['pid', 'aid', 'hop', 'weight']]
         num_profiles = int(np.max(triplets_np['pid'])) + 1
         
-    # ==========================================
-    # Extra: Build History Cache
-    # ==========================================
     print("Building history cache...")
     
-    # 1. Load AS Info for Org Mapping
     as_info_path = output_dir / "as_info.jsonl"
     if not as_info_path.exists():
         as_info_path = output_dir.parent / "as_info.jsonl"
@@ -297,34 +272,28 @@ def build_dataset(output_dir: Path, seed: int = 42):
         else:
             print(f"Warning: {as_info_path} not found, continue without org mapping cache.")
     
-    # 2. Process Triplets for History
-    # df_triplets should have columns ['pid', 'aid', 'hop']
     idx_to_asn_map = {v: k for k, v in as_map.items()}
     
-    # Group by pid, aid -> min hop
+    # Use each AS's minimum hop within its profile.
     grouped = df_triplets.groupby(['pid', 'aid'])['hop'].min().reset_index()
     
-    # --- OPTIMIZATION: Keep only first 5 hops (0, 1, 2, 3, 4) ---
+    # History and anchors use hop 0 (origin) through hop 4.
     grouped = grouped[grouped['hop'] < 5]
     
     profile_history = {} # as_id -> list[pid]
     profile_org_history = {} # pid -> list[org_id]
 
-    # Columns: pid, aid, hop
     for row in grouped.itertuples(index=False):
         pid = row.pid
         aid = int(row.aid)
         hop = row.hop
         
-        # Resolve real ASN for Org lookup
         asn = idx_to_asn_map.get(aid, -1)
 
-        # 1. New History: ASID -> List[PID]
         if aid not in profile_history:
             profile_history[aid] = []
         profile_history[aid].append(pid)
 
-        # 2. Org History
         org_id = as_org.get(asn)
         if org_id:
             if pid not in profile_org_history:
@@ -333,9 +302,6 @@ def build_dataset(output_dir: Path, seed: int = 42):
 
     torch.save({pid: list(set(orgs)) for pid, orgs in profile_org_history.items()}, output_dir / "history_cache.pt")
 
-    # ==========================================
-    # Build Fingerprint Anchors
-    # ==========================================
     if skip_anchor_rebuild:
         print("Skipping fingerprint anchor rebuild (cache exists).")
     else:
@@ -395,7 +361,6 @@ def build_dataset(output_dir: Path, seed: int = 42):
         
     print("Preprocessing complete.")
 
-    # Cleanup intermediate files
     print("Cleaning up intermediate files...")
     for f in ["prefix_map.txt", "as_map.txt", "prefix_to_profile.bin", "profile_triplets.bin", "profile_fingerprints.bin"]:
         try:

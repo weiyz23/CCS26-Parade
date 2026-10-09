@@ -12,10 +12,9 @@
 
 using namespace std;
 
-// AS pair structure, representing an AS Link
 struct ASPair {
-    uint32_t from_as;    // Source AS (4 bytes)
-    uint32_t to_as;      // Target AS (4 bytes)
+    uint32_t from_as;
+    uint32_t to_as;
 
     ASPair() : from_as(0), to_as(0) {}
     ASPair(uint32_t from, uint32_t to) : from_as(from), to_as(to) {}
@@ -37,9 +36,6 @@ struct ASPair {
 };
 
 
-/*
- * AS Pair with timestamp and origin AS
- */
 struct ASPairWithTimeAndOrigin {
     ASPair as_pair;
     time_t timestamp;
@@ -48,7 +44,6 @@ struct ASPairWithTimeAndOrigin {
     ASPairWithTimeAndOrigin(ASPair p, time_t ts, uint32_t origin) : as_pair(p), timestamp(ts), origin_as(origin) {}
 };
 
-// Standard library compatible hash function definition
 namespace std {
     template<>
     struct hash<ASPair> {
@@ -71,7 +66,6 @@ struct Prefix {
         // [addr8...addr13, addr14, addr15] -> 0 | (fam<<48) | (len<<56)
         ptr[1] = (static_cast<uint64_t>(len) << 56) | (static_cast<uint64_t>(fam) << 48);
 #else
-        // General safe path: big-endian or unknown architecture
         memset(addr + 4, 0, 10);
         memcpy(addr, &ipv4_addr, 4); 
         addr[14] = fam;
@@ -80,7 +74,6 @@ struct Prefix {
     }
 
     Prefix(uint8_t fam, const uint8_t* ipv6_addr, uint8_t len) {
-        // For IPv6, memcpy is still the most stable
         memcpy(addr, ipv6_addr, 14); 
         addr[14] = fam;
         addr[15] = len;
@@ -141,7 +134,6 @@ bool prefixToString(const Prefix& prefix, char* buffer, size_t buffer_size) {
     return false;
 }
 
-// Convert from string to Prefix, supports IPv4 "a.b.c.d/len" and IPv6 "addr/len"
 Prefix stringToPrefix(const char* str) {
     char ip_str[INET6_ADDRSTRLEN];
     int len;
@@ -149,14 +141,12 @@ Prefix stringToPrefix(const char* str) {
         throw std::invalid_argument("Invalid prefix format");
     }
     if (strchr(ip_str, ':')) {
-        // IPv6
         struct in6_addr addr6;
         if (inet_pton(AF_INET6, ip_str, &addr6) != 1) {
             throw std::invalid_argument("Invalid IPv6 address");
         }
         return Prefix(6, addr6.s6_addr, len);
     } else {
-        // IPv4
         struct in_addr addr;
         if (inet_pton(AF_INET, ip_str, &addr) != 1) {
             throw std::invalid_argument("Invalid IPv4 address");
@@ -174,9 +164,8 @@ constexpr uint8_t STAGE_END_AF = (1u << 0); // End-of-phase marker.
 constexpr uint8_t BASELINE_SWITCH_AF = (1u << 1); // Baseline switch marker.
 constexpr uint8_t UPD_WINDOW_END_AF = (1u << 2); // End-of-update-window marker.
 
-// Community label values for BGPRecord::community_label.
-// A non-zero value indicates a well-known community was detected on the route.
-constexpr uint8_t COMMUNITY_NONE      = 0; // No special community.
+// Nonzero community_label values identify recognized well-known communities.
+constexpr uint8_t COMMUNITY_NONE      = 0;
 constexpr uint8_t COMMUNITY_BLACKHOLE = 1; // RFC 7999 BLACKHOLE community (65535:666).
 
 // Route event types carried by BGPRecord::route_event.
@@ -188,28 +177,22 @@ constexpr time_t TRAINING_UPD_LOOKBACK_SEC = 14 * 24 * 3600;
 constexpr float TRAINING_RIB_SAMPLE_WEIGHT = 1.0f;
 constexpr float TRAINING_UPD_SAMPLE_WEIGHT = 0.2f;
 
-// Fixed-size record exchanged through the lock-free ring buffer.
+// 256-byte record shared by the parser, monitor and cached snapshots.
 struct BGPRecord {
-    // Network prefix.
     Prefix prefix;
     // Record timestamp in seconds.
     time_t timestamp;
-    // Origin AS (4 bytes)
     uint32_t origin_as;
     // Peer ASN that emitted this element.
     uint32_t peer_asn;
-    // Control signal for phase/window boundaries.
     uint8_t signal;
     // Number of valid entries in as_pairs.
     uint8_t as_pair_count;
-    // Well-known community tag for this route (see COMMUNITY_* constants).
     uint8_t community_label;
     // Route event type for update semantics (see ROUTE_EVENT_* constants).
     uint8_t route_event;
-    // AS links extracted from the AS path.
     ASPair as_pairs[AS_PAIR_SIZE];
     
-    // Zero-initialize all fields.
     BGPRecord() : timestamp(0), origin_as(0), peer_asn(0), prefix{}, signal(0), as_pair_count(0), community_label(COMMUNITY_NONE), route_event(ROUTE_EVENT_ANNOUNCE), as_pairs{} {}
 };
 

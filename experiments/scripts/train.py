@@ -42,7 +42,6 @@ def run_training(cfg: dict) -> None:
     data_dir = Path(cfg["paths"]["data_dir"])
     model_dir = Path(cfg["paths"]["model_dir"])
     model_dir.mkdir(parents=True, exist_ok=True)
-    # Record the effective settings after all command-line overrides.
     with (model_dir / "train_config.json").open("w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
 

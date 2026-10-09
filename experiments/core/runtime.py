@@ -1,5 +1,3 @@
-"""Small, dependency-free helpers shared by the AE entry points."""
-
 from contextlib import contextmanager
 import csv
 import fcntl

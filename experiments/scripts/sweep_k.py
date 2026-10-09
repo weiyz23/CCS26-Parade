@@ -1,4 +1,3 @@
-"""Compatibility CLI forwarding to the shared AE sweep implementation."""
 import argparse
 from pathlib import Path
 import sys

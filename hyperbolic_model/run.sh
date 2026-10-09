@@ -1,22 +1,17 @@
 #!/bin/bash
 
-# Exit immediately if a command exits with a non-zero status
 set -e
 
-# Get the directory of the script
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
-# Set LD_LIBRARY_PATH to include nvidia libraries (fix for nvrtc error)
-# Note: This path is relative to the project root; adjust if your conda environment differs
+# CUDA NVRTC libraries for the local conda environment.
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$DIR/../.conda/lib/python3.12/site-packages/nvidia/cu13/lib/
 
-# Default Dataset Directory
 DATASET_DIR="${1:-../dataset/klayswap}"
 DATA_DIR="$DATASET_DIR"
 MODEL_DIR="$DATASET_DIR/saved_models"
 VIZ_DIR="$DATASET_DIR/visualizations"
-# Default parameters
 EMBEDDING_DIM="${EMBEDDING_DIM:-24}"
 NUM_VECTORS="${NUM_VECTORS:-2}"
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-1000}"
@@ -50,7 +45,6 @@ if [ "${SKIP_PIPELINE_DETECTION:-0}" = "1" ]; then
     echo "Skipping legacy detect.py pass; caller will score candidates directly."
     INPUT_CSV=""
 else
-    # Try to find anomaly_links.csv
     if [ -f "$DATASET_DIR/processed_data/anomaly/anomaly_links.csv" ]; then
         INPUT_CSV="$DATASET_DIR/processed_data/anomaly/anomaly_links.csv"
     elif [ -f "$DATASET_DIR/processed_data/anomaly_links.csv" ]; then
@@ -73,16 +67,19 @@ if [ -n "$INPUT_CSV" ]; then
         --anomalous-output "$DETECT_OUTPUT_DIR/anomalous.csv" \
         --missing-output "$DETECT_OUTPUT_DIR/missing.csv"
 fi
-# Optional Steps Below
 echo "[4/5] Running Filter for Anomaly Results..."
 python filter.py --data_dir "$DATA_DIR"
 
 echo "[5/5] Running Visualization..."
-python visualize.py --data_dir "$DATA_DIR" --model_dir "$MODEL_DIR" --viz_dir "$VIZ_DIR" --embed_dim $EMBEDDING_DIM --num_vectors $NUM_VECTORS
-python visualize_as_dim_reduction.py --data_dir "$DATA_DIR" --model_dir "$MODEL_DIR" --viz_dir "$VIZ_DIR" --embed_dim $EMBEDDING_DIM --num_vectors $NUM_VECTORS
+if [ "${SKIP_PIPELINE_VISUALIZATION:-0}" = "1" ]; then
+    echo "Skipping inline visualization; caller will run and report optional plots separately."
+elif ! python run_visualizations.py --data_dir "$DATA_DIR" --model_dir "$MODEL_DIR" \
+    --viz_dir "$VIZ_DIR" --embed_dim "$EMBEDDING_DIM" --num_vectors "$NUM_VECTORS"; then
+    echo "Warning: optional visualization failed. Detection results are available; see $VIZ_DIR/visualization_status.json."
+fi
 
 echo "==========================================="
-echo "Pipeline Completed Successfully!"
+echo "Training and Detection Pipeline Completed Successfully!"
 echo "Plots:    $VIZ_DIR"
 echo "Detect:   $DETECT_OUTPUT_DIR"
 echo "==========================================="

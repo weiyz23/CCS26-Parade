@@ -1,5 +1,3 @@
-# bgp_data_adapter.py
-# Adapter for downloading BGP data from RIPE RIS and RouteViews
 
 from abc import ABC, abstractmethod
 import os
@@ -244,17 +242,7 @@ def create_retry_session(retries=5, backoff_factor=0.3, status_forcelist=(500, 5
 class BGPDataAdapter(ABC):
     @abstractmethod
     def generate_tasks(self, start_time: datetime.datetime, end_time: datetime.datetime, data_type: str, output_dir: str) -> list:
-        """
-        Generate download tasks for the given time window and data type.
-        
-        :param start_time: Start time
-        :param end_time: End time
-        :param data_type: 'rib' or 'upd'
-        :param output_dir: Output directory
-        :param cache_file: Cache file path
-        :param force_refresh: Force refresh cache
-        :return: List of (url, file_path) tuples
-        """
+        """Return (URL, destination) tasks for RIBs or UPDATEs in the requested window."""
         pass
 
 class RIPEAdapter(BGPDataAdapter):
@@ -280,7 +268,6 @@ class RIPEAdapter(BGPDataAdapter):
                 else:
                     raise
         
-        # Use regex to extract .gz and .bz2 file links
         file_links = re.findall(r'href="([^"]*\.(?:gz|bz2))"', r.text)
         
         ribs_file_list = []
@@ -407,8 +394,7 @@ class RouteViewsAdapter(BGPDataAdapter):
         include_updates: bool,
         request_timeout: int = 30,
     ):
-        # A cached UPDATE-only listing says nothing about the month's RIBs.
-        # Keep each requested scope separate, including when reading old archives.
+        # Cache UPDATE and RIB listings separately.
         cache_key = f"{dir_url}|ribs={int(include_ribs)}|updates={int(include_updates)}"
         return _get_file_list_cached_common(
             output_dir=output_dir,
@@ -469,7 +455,6 @@ class RouteViewsAdapter(BGPDataAdapter):
         
         return task_params_list
     
-# Shared utility functions
 def _safe_remove(path: str | None):
     if path and os.path.exists(path):
         os.remove(path)
@@ -517,10 +502,7 @@ def _resolve_uncompressed_path(file_path: str):
 
 
 async def decompress_file_async(file_path, uncompressed_path=None):
-    """
-    Decompress a single file (.gz or .bz2) asynchronously.
-    Returns True if decompression succeeds, and removes the compressed file.
-    """
+    """Return True after decompression succeeds and the compressed file is removed."""
     if uncompressed_path is None:
         if file_path.endswith('.gz'):
             uncompressed_path = file_path[:-3]
@@ -553,20 +535,13 @@ async def download_one_file_async(
     retry_wait_cap_sec: float = 20.0,
     retry_jitter_sec: float = 2.0,
 ) -> str:
-    """
-    Download a file with integrity check and decompression asynchronously.
-    Returns:
-    - "downloaded": File was successfully downloaded and processed.
-    - "skipped": File already exists and is valid, no download needed.
-    - "failed": Download or processing failed.
-    """
+    """Download and decompress a file; return "downloaded", "skipped", or "failed"."""
     uncompressed_path = _resolve_uncompressed_path(file_path)
 
     if uncompressed_path and os.path.exists(uncompressed_path) and os.path.getsize(uncompressed_path) > 0:
         # Uncompressed exists and no compressed file, assume valid
         return "skipped"
 
-    # Download with retries using aiohttp.
     for attempt in range(max_retries):
         temp_path = file_path + '.part'
         try:
@@ -619,7 +594,6 @@ async def download_one_file_async(
 
             os.replace(temp_path, file_path)
 
-            # After download, check if it's compressed and decompress if needed
             if not uncompressed_path or await decompress_file_async(file_path, uncompressed_path):
                 return "downloaded"
             raise IOError("Decompression failed")
@@ -701,16 +675,10 @@ async def download_files_parallel_async(
     max_workers: int = 5,
     profile: str = "default",
 ):
-    """
-    Download files in parallel asynchronously.
-    Returns:
-    - successful_paths: newly downloaded files
-    - failed_paths: failed downloads
-    - skipped_paths: files already present and considered valid
-    """
+    """Return (newly_downloaded_paths, failed_paths, skipped_existing_paths)."""
     cfg = _build_download_profile(profile)
     effective_workers = min(max_workers, cfg["max_workers"])
-    semaphore = asyncio.Semaphore(effective_workers)  # Limit concurrent downloads
+    semaphore = asyncio.Semaphore(effective_workers)
 
     async def download_with_semaphore(url, path, session):
         async with semaphore:

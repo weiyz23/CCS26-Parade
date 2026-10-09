@@ -21,7 +21,7 @@
 #include <cmath>
 #include <functional>
 #include <bitset>
-#include <sys/stat.h>  // for mkdir
+#include <sys/stat.h>
 #include <filesystem>
 #include <cstdarg>
 #include <algorithm>
@@ -40,21 +40,15 @@ constexpr time_t ANOMALY_BASELINE_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 
 const char* TEST_LOG_DIR = "./test_log/";
 
-/*
- * Hash function for pair<Prefix, uint32_t>
- */
 struct pair_hash {
     template <class T1, class T2>
     size_t operator()(const std::pair<T1, T2>& p) const {
         auto hash1 = std::hash<T1>{}(p.first);
         auto hash2 = std::hash<T2>{}(p.second);
-        return hash1 ^ (hash2 << 1);  // Simple combination to avoid collisions
+        return hash1 ^ (hash2 << 1);
     }
 };
 
-/*
- * One anomaly record to be written to the CSV output.
- */
 struct ASAnomalyRecord {
     time_t timestamp;
     Prefix prefix;
@@ -69,14 +63,7 @@ struct ASAnomalyRecord {
     string affected_asns_str;  // Colon-separated affected downstream ASNs.
 };
 
-/*
- * BGP Anomaly Detector
- * - Independent anomaly detection thread, real-time analysis of prefix-AS link changes
- * - Supports snapshot comparison graph anomaly detection
- * - Batch aggregation processing to improve detection efficiency
- */
 
-// Prefix anomaly detection event structure - supports batch aggregation
 struct PrefixAnomalyBatch {
     // New prefix AS links (with timestamp and Origin AS)
     unordered_map<Prefix, vector<ASPairWithTimeAndOrigin>> new_links;
@@ -95,7 +82,6 @@ struct PrefixAnomalyBatch {
                         const unordered_map<Prefix, vector<ASPairWithTimeAndOrigin>>& links)
             : batch_timestamp(ts), batch_id(id), new_links(links) {}
 
-    // Move constructor form to avoid large batch copies
     PrefixAnomalyBatch(time_t ts, uint64_t id,
                         unordered_map<Prefix, vector<ASPairWithTimeAndOrigin>>&& links)
             : batch_timestamp(ts), batch_id(id), new_links(std::move(links)) {}
@@ -122,7 +108,6 @@ struct PrefixAnomalyBatch {
     }
 };
 
-// Batch timestamp comparator
 struct BatchTimestampComparator {
     bool operator()(const PrefixAnomalyBatch& a, const PrefixAnomalyBatch& b) const {
         return a.batch_timestamp > b.batch_timestamp; // Min heap: smaller timestamp has higher priority
@@ -138,14 +123,12 @@ private:
     atomic<bool> running_{true};
     atomic<uint64_t> in_flight_batches_{0};
 
-    // CSV output related
     string csv_filename_;
     vector<ASAnomalyRecord> anomaly_records_;
-    mutable mutex records_mutex_;  // Protect record list
+    mutable mutex records_mutex_;
     unordered_map<pair<Prefix, uint32_t>, time_t, pair_hash> recorded_asns_;  // prefix-ASN -> last emitted ts
-    mutable mutex recorded_asns_mutex_;  // Protect deduplication set
+    mutable mutex recorded_asns_mutex_;
 
-    // Data merging and scheduled detection related members
     mutable mutex accumulated_data_mutex_;
     unordered_map<Prefix, unordered_map<ASPair, pair<time_t, uint32_t>>> accumulated_links_;
     unordered_set<Prefix> accumulated_blackhole_prefixes_;
@@ -153,8 +136,7 @@ private:
     time_t last_detection_time_{0};
     mutable mutex time_mutex_;
 
-    // Added: Prefix AS Link history records for centrality calculation
-    // Sharded Map to reduce lock contention
+    // Shard prefix history to limit lock contention.
     static constexpr size_t NUM_SHARDS = 16;
     struct HistoryShard {
         mutable mutex mtx;
@@ -163,9 +145,8 @@ private:
         char padding[64]; 
     };
     vector<unique_ptr<HistoryShard>> history_shards_;
-    static constexpr time_t HISTORY_EXPIRY_SECONDS = 2 * 60 * 60; // 2 hours expiry time
+    static constexpr time_t HISTORY_EXPIRY_SECONDS = 2 * 60 * 60;
 
-    // Get shard index for prefix
     size_t getShardIndex(const Prefix& prefix) const {
         return std::hash<Prefix>{}(prefix) % NUM_SHARDS;
     }
@@ -185,16 +166,14 @@ private:
         {
             lock_guard<mutex> lock(accumulated_data_mutex_);
 
-            // Merge prefix's new AS links into accumulated data (record minimum timestamp and Origin AS)
+            // Retain the earliest triggering timestamp and its origin for each link.
             for (const auto& [prefix, new_links] : batch.new_links) {
                 auto& accumulated_links = accumulated_links_[prefix];
                 for (const auto& link_with_ts : new_links) {
                     auto it = accumulated_links.find(link_with_ts.as_pair);
                     if (it == accumulated_links.end()) {
-                        // New AS Pair, insert directly
                         accumulated_links[link_with_ts.as_pair] = {link_with_ts.timestamp, link_with_ts.origin_as};
                     } else {
-                        // Existing AS Pair, keep minimum timestamp, but update Origin AS (if timestamp is same or newer)
                         if (link_with_ts.timestamp < it->second.first) {
                             it->second = {link_with_ts.timestamp, link_with_ts.origin_as};
                         }
@@ -208,7 +187,6 @@ private:
                 batch.ip_leasing_prefixes.begin(), batch.ip_leasing_prefixes.end());
         }
 
-        // Check if anomaly detection needs to be executed (based on time interval)
         time_t current_time = batch.batch_timestamp;
         bool trigger_detection = false;
         {
@@ -224,7 +202,6 @@ private:
         }
     }
 
-    // Update prefix history records and clean up expired data
     void updatePrefixHistory(const unordered_map<Prefix, unordered_map<ASPair, pair<time_t, uint32_t>>>& links,
                             time_t current_time) {        
         for (const auto& [prefix, links_map] : links) {
@@ -246,7 +223,6 @@ private:
         cleanupExpiredHistoryShard(idx, current_time);
     }
     
-    // Clean up expired history records for specified shard
     void cleanupExpiredHistoryShard(size_t idx, time_t current_time) {
         auto& shard = *history_shards_[idx];
         lock_guard<mutex> lock(shard.mtx);
@@ -259,13 +235,11 @@ private:
         }
     }
 
-    // Check all newly generated prefix-AS links, execute anomaly detection
     void executeAnomalyDetection(time_t timestamp) {
         unordered_map<Prefix, unordered_map<ASPair, pair<time_t, uint32_t>>> links_to_check;
         unordered_set<Prefix> blackhole_prefixes;
         unordered_set<Prefix> ip_leasing_prefixes;
 
-        // Get accumulated data and clear cache
         {
             lock_guard<mutex> lock(accumulated_data_mutex_);
             links_to_check = std::move(accumulated_links_);
@@ -276,10 +250,8 @@ private:
             accumulated_ip_leasing_prefixes_.clear();
         }
 
-        // Update prefix history records and clean up expired data
         updatePrefixHistory(links_to_check, timestamp);
 
-        // Execute topology analysis, record details of newly appeared AS Links
         vector<ASAnomalyRecord> local_records;
         analyzeCriticalAS(links_to_check, blackhole_prefixes, ip_leasing_prefixes, local_records);
         
@@ -289,7 +261,6 @@ private:
         }
     }
 
-    // AS topology analysis function: build AS graph and record critical anomalous AS Links and origin AS for each prefix
     void analyzeCriticalAS(const unordered_map<Prefix, 
         unordered_map<ASPair, pair<time_t, uint32_t>>>& prefix_events,
         const unordered_set<Prefix>& blackhole_prefixes,
@@ -298,11 +269,9 @@ private:
 
         if (prefix_events.empty()) return;
 
-        // Parse all prefixes, find AS Links with highest centrality for them
         for (const auto& [prefix, as_pairs_with_ts] : prefix_events) {
             if (as_pairs_with_ts.empty()) continue;
 
-            // Get historical AS links for this prefix
             unordered_set<ASPair> historical_links;
             {
                 size_t idx = getShardIndex(prefix);
@@ -314,13 +283,11 @@ private:
                 }
             }
 
-            // Merge historical and new links to build complete graph
             unordered_set<ASPair> all_links = historical_links;
             for (const auto& [as_pair, ts_origin] : as_pairs_with_ts) {
                 all_links.insert(as_pair);
             }
 
-            // Use AS level scoring to find critical AS and corresponding origin AS
             unordered_map<uint32_t, tuple<time_t, uint32_t, uint32_t>> as_info; // asn -> (timestamp, level, origin_as)
             unordered_map<uint32_t, vector<uint32_t>> asn_upstream;
             unordered_map<uint32_t, vector<uint32_t>> asn_affected_downstream;
@@ -394,7 +361,6 @@ private:
                 return output;
             };
 
-            // After deduplication, record critical AS for subsequent anomaly detection
             {
                 lock_guard<mutex> lock(recorded_asns_mutex_);
                 uint8_t is_bh = static_cast<uint8_t>(blackhole_prefixes.count(prefix) > 0);
@@ -434,7 +400,6 @@ private:
         }
     }
 
-    // Helper function: reconstruct AS topology graph based on AS Links, calculate level of each AS, and decide which AS to record
     void findMostCriticalAS(const unordered_set<ASPair>& as_links, const unordered_map<ASPair, pair<time_t, uint32_t>>& as_pairs_with_ts,
         unordered_map<uint32_t, tuple<time_t, uint32_t, uint32_t>>& as_info,
         unordered_map<uint32_t, vector<uint32_t>>& asn_upstream,
@@ -456,7 +421,6 @@ private:
             nodes.insert(as_pair.to_as);
         }
 
-        // Ensure all nodes have entries in adj and rev_adj
         for (uint32_t node : nodes) {
             adj[node];
             rev_adj[node];
@@ -513,7 +477,6 @@ private:
             }
         }
 
-        // Calculate SCC level count
         unordered_map<int, int> scc_level_count;
         for (int l : scc_level) {
             if (l > 0) scc_level_count[l]++;
@@ -528,7 +491,6 @@ private:
             scc_cumul_level_count[l] = cum;
         }
 
-        // For each level 1 SCC, compute coverage in its reachable subgraph
         auto find_origin_as = [&](uint32_t from_as, uint32_t to_as) -> pair<time_t, uint32_t> {
             ASPair p = {from_as, to_as};
             auto it = as_pairs_with_ts.find(p);
@@ -649,7 +611,7 @@ private:
             }
 
             if (best_neighbor_scc != -1) {
-                upstream_asns = sccs[best_neighbor_scc];  // Collect all ASNs in the best neighbor SCC
+                upstream_asns = sccs[best_neighbor_scc];
                 const auto& neighbors = is_predecessor ? rev_adj : adj;
                 const auto& current_nodes = sccs[current_scc];
 
@@ -672,7 +634,6 @@ private:
             }
         };
 
-        // Find all level 1 SCCs
         vector<int> level1_sccs;
         for (size_t scc = 0; scc < S; ++scc) {
             if (scc_level[scc] == 1) {
@@ -680,9 +641,7 @@ private:
             }
         }
 
-        // For each level 1 SCC, compute coverage in its reachable subgraph
         for (int root_scc : level1_sccs) {
-            // Find all SCCs reachable from root_scc
             unordered_set<int> reachable;
             function<void(int)> dfs = [&](int u) {
                 if (reachable.count(u)) return;
@@ -691,8 +650,7 @@ private:
             };
             dfs(root_scc);
 
-            // Compute coverage for reachable SCCs using global graph with mask
-            vector<double> sub_coverage(S, 0.0); // Global size, but only fill reachable
+            vector<double> sub_coverage(S, 0.0);
             if (S < 256) {
                 solveReachabilityMasked<256>(S, scc_adj, scc_rev_adj, scc_level, scc_cumul_level_count, S, reachable, sub_coverage);
             } else if (S < 512) {
@@ -714,7 +672,6 @@ private:
                 solveReachabilityMasked<1024>(S, scc_adj, scc_rev_adj, scc_level, scc_cumul_level_count, S, sub_reachable, sub_coverage);
             }
 
-            // Find max coverage SCC in reachable set
             double max_cov = 0;
             int crit_scc = -1;
             for (int scc : reachable) {
@@ -749,7 +706,6 @@ private:
         }
     }
 
-    // Template function: for solving reachability problems of specific size, using mask to compute only active SCCs
     template<size_t N>
     void solveReachabilityMasked(size_t S, 
                           const vector<vector<int>>& scc_adj,
@@ -762,9 +718,8 @@ private:
         
         static constexpr size_t COMPUTED_FLAG = N - 1;
 
-        // The active subgraph may contain large global SCC IDs even when it
-        // has fewer than N nodes. Pack those IDs into the available data bits;
-        // the final bit remains reserved for the computed flag.
+        // Pack global SCC IDs into active-subgraph bits; reserve the final bit
+        // for the computed flag.
         if (active.size() > COMPUTED_FLAG) {
             throw length_error("Active SCC count exceeds reachability bitset capacity");
         }
@@ -777,15 +732,13 @@ private:
             bit_index[scc] = next_bit++;
         }
         
-        // Bitset version - use last bit as computed flag
         vector<bitset<N>> downstream_reach(S);
         vector<bitset<N>> upstream_reach(S);
 
-        // Compute downstream reachability
         function<void(size_t)> compute_downstream = [&](size_t scc) {
-            if (downstream_reach[scc][COMPUTED_FLAG]) return;   // Check last bit
-            downstream_reach[scc][COMPUTED_FLAG] = 1;           // Set last bit as computed flag
-            downstream_reach[scc][bit_index[scc]] = 1;          // Include self
+            if (downstream_reach[scc][COMPUTED_FLAG]) return;
+            downstream_reach[scc][COMPUTED_FLAG] = 1;
+            downstream_reach[scc][bit_index[scc]] = 1;
             for (int v : scc_adj[scc]) {
                if (active.count(v) && scc_level[v] >= scc_level[scc]) {
                     compute_downstream(v);
@@ -794,11 +747,10 @@ private:
             }
         };
 
-        // Compute upstream reachability
         function<void(size_t)> compute_upstream = [&](size_t scc) {
-            if (upstream_reach[scc][COMPUTED_FLAG]) return;   // Check last bit
-            upstream_reach[scc][COMPUTED_FLAG] = 1;           // Set last bit as computed flag
-            upstream_reach[scc][bit_index[scc]] = 1;          // Include self
+            if (upstream_reach[scc][COMPUTED_FLAG]) return;
+            upstream_reach[scc][COMPUTED_FLAG] = 1;
+            upstream_reach[scc][bit_index[scc]] = 1;
             for (int v : scc_rev_adj[scc]) {
                 if (active.count(v) && scc_level[v] <= scc_level[scc]) {
                     compute_upstream(v);
@@ -814,7 +766,6 @@ private:
             }
         }
         
-        // Calculate coverage
         for (size_t scc = 0; scc < S; ++scc) {
             if (active.count(scc) && scc_level[scc] > 0) {                
                 size_t upstream_reach_count = upstream_reach[scc].count() - 1; 
@@ -833,7 +784,6 @@ private:
         }
     }
 
-    // Tarjan algorithm implementation for strongly connected components
     void tarjanSCC(const unordered_map<uint32_t, vector<uint32_t>>& adj, const vector<uint32_t>& node_list,
                    vector<vector<uint32_t>>& sccs, unordered_map<uint32_t, int>& node_to_scc) {
         int time = 0;
@@ -888,20 +838,17 @@ public:
     )
         : graph_(graph), num_threads_(num_threads), anomaly_queue_(4096) {
         
-        // Initialize history shards
         history_shards_.reserve(NUM_SHARDS);
         for (size_t i = 0; i < NUM_SHARDS; ++i) {
             history_shards_.push_back(make_unique<HistoryShard>());
         }
 
-        last_detection_time_ = 0; // Initialize detection time
+        last_detection_time_ = 0;
 
-        // Initialize CSV filename
         if (csv_filename) {
             csv_filename_ = csv_filename;
         }
 
-        // Start detection threads
         detection_threads_.reserve(num_threads_);
         for (size_t i = 0; i < num_threads_; ++i) {
             detection_threads_.emplace_back(&TopologyAnalyzer::detectionLoop, this);
@@ -912,7 +859,6 @@ public:
         shutdown();
     }
 
-    // Submit new prefix-AS link batch for anomaly detection
     void submitPrefixLinkBatch(PrefixAnomalyBatch&& batch) {
         if (!batch.isEmpty()) {
             anomaly_queue_.enqueue(std::move(batch));
@@ -943,14 +889,11 @@ public:
                 }
             }
 
-            // Write to CSV file
             if (!csv_filename_.empty()) {
                 lock_guard<mutex> lock(records_mutex_);
-                // Sort by timestamp
                 sort(anomaly_records_.begin(), anomaly_records_.end(), [](const ASAnomalyRecord& a, const ASAnomalyRecord& b) {
                     return a.timestamp < b.timestamp;
                 });
-                // Write CSV
                 FILE* csv_file = fopen(csv_filename_.c_str(), "w");
                 if (csv_file) {
                     fprintf(csv_file, "timestamp,prefix,asn,level,topology_level,origin,is_origin_asn,is_blackhole_route,is_ip_leasing,upstream_asns,affected_asns\n");
@@ -992,28 +935,24 @@ public:
     };
 
 
-    // Calculate memory usage of snapshot storage
     size_t getMemoryUsage() const {
         size_t memory = 0;
         
-        // Calculate prefix history memory usage
         for (const auto& shard_ptr : history_shards_) {
             lock_guard<mutex> lock(shard_ptr->mtx);
             for (const auto& [prefix, history] : shard_ptr->history) {
-                memory += sizeof(Prefix);  // Prefix key
-                memory += sizeof(pair<unordered_set<ASPair>, time_t>);  // History record structure
-                memory += history.first.size() * sizeof(ASPair);  // AS link set
+                memory += sizeof(Prefix);
+                memory += sizeof(pair<unordered_set<ASPair>, time_t>);
+                memory += history.first.size() * sizeof(ASPair);
             }
-             memory += (shard_ptr->history.size()) * 64; // Hash table overhead per element
+             memory += (shard_ptr->history.size()) * 64;
         }
 
-        // Calculate anomaly_records_ memory usage
         {
             lock_guard<mutex> lock(records_mutex_);
             memory += anomaly_records_.size() * sizeof(ASAnomalyRecord);
         }
 
-        // Calculate recorded_asns_ memory usage
         {
             lock_guard<mutex> lock(recorded_asns_mutex_);
             memory += recorded_asns_.size() * (sizeof(Prefix) + sizeof(uint32_t) + 16);  // Rough estimate of overhead per element

@@ -1,5 +1,3 @@
-# bgp_downloader.py
-# BGP Data Downloader for continuous incremental updates
 
 import os
 import datetime
@@ -149,7 +147,6 @@ class BGPDataDownloader:
 
         self.completeness_policy = load_completeness_policy()
         
-        # Create directories with error handling
         try:
             os.makedirs(dataset_dir, exist_ok=True)
             os.makedirs(raw_data_dir, exist_ok=True)
@@ -481,10 +478,7 @@ class BGPDataDownloader:
         return bool(successful_paths)
 
     async def download_upd_window(self):
-        """Download UPD files in configured rolling window.
-
-        Returns a tuple: (downloaded_any, reached_end_time).
-        """
+        """Download rolling-window UPDATEs; return (downloaded_any, reached_end_time)."""
         start_time, end_time, reached_end_time = self._get_download_window('upd')
         if reached_end_time:
             return False, True
@@ -498,7 +492,6 @@ class BGPDataDownloader:
         return downloaded_any, False
 
     def update_completion_status(self, successful_paths, source, data_type):
-        """Update completion status and check for completeness"""
         total_collectors = self.all_collectors[source]
         updated_keys = set()
         
@@ -513,7 +506,6 @@ class BGPDataDownloader:
                 self.completion_status[key] = set()
             self.completion_status[key].add(collector)
         
-        # Check completeness for updated keys
         for key in updated_keys:
             timestamp = key[2]
             if not self._is_source_expected_for_timestamp(source, data_type, timestamp):
@@ -546,7 +538,6 @@ class BGPDataDownloader:
         expected_collectors: int,
         missing_collector_names: list[str],
     ):
-        """Signal that data is complete - can be customized"""
         ts_key = (data_type, timestamp)
         if ts_key not in self.completed_sources:
             self.completed_sources[ts_key] = set()
@@ -605,10 +596,7 @@ class BGPDataDownloader:
                 self.done_markers_written.remove(key)
 
     async def download_rib_window(self):
-        """Download RIB files in configured rolling window.
-
-        Returns a tuple: (downloaded_any, reached_end_time).
-        """
+        """Download rolling-window RIBs; return (downloaded_any, reached_end_time)."""
         start_time, end_time, reached_end_time = self._get_download_window('rib')
         if reached_end_time:
             return False, True
@@ -620,7 +608,6 @@ class BGPDataDownloader:
             source_downloaded = await self._download_source_window(source, 'rib', start_time, end_time)
             downloaded_any = downloaded_any or source_downloaded
 
-        # Download AS rank once
         date_str = end_time.strftime('%Y-%m-01')
         as_rank_file = os.path.join(self.dataset_dir, f'as_info.{end_time.strftime("%y%m")}.jsonl')
         self.download_as_rank(date_str, as_rank_file)
@@ -628,7 +615,6 @@ class BGPDataDownloader:
         return downloaded_any, False
 
     def download_as_rank(self, date_str, output_file):
-        # Copied from download_history_data.py
         if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
             print(f"AS Rank data already exists at {output_file}, skipping download.")
             return
@@ -638,7 +624,6 @@ class BGPDataDownloader:
 
         session = create_retry_session()
 
-        # Get total count
         query = """{
             asns(first:%d, offset:%d) {
                 totalCount
@@ -714,7 +699,6 @@ class BGPDataDownloader:
             print(f"Error getting total count: {str(e)}")
             return
 
-        # Parallel download pages
         from concurrent.futures import ThreadPoolExecutor, as_completed
         all_nodes = set()
 
@@ -748,7 +732,6 @@ class BGPDataDownloader:
                 for node in nodes:
                     all_nodes.add(json.dumps(node))
 
-        # Write to file
         try:
             with open(output_file, "w") as f:
                 for node_json in all_nodes:
@@ -803,13 +786,12 @@ class BGPDataDownloader:
                     except (ValueError, IndexError):
                         continue
 
-        # Cleanup old AS info files (older than 2 months)
         for filename in os.listdir(self.dataset_dir):
             if filename.startswith('as_info.') and filename.endswith('.jsonl'):
                 try:
                     parts = filename.split('.')
                     if len(parts) == 3:
-                        date_part = parts[1]  # e.g., '2603'
+                        date_part = parts[1]
                         if len(date_part) == 4:
                             yy = int(date_part[:2]) + 2000
                             mm = int(date_part[2:])
@@ -829,7 +811,6 @@ class BGPDataDownloader:
             print(f"Removed old as_info month tags: {dates_str}")
 
     async def run_upd_loop(self):
-        """Async loop for UPD downloads"""
         while True:
             downloaded_any, reached_end_time = await self.download_upd_window()
             if reached_end_time:
@@ -839,7 +820,6 @@ class BGPDataDownloader:
                 await asyncio.sleep(0)
 
     async def run_rib_loop(self):
-        """Async loop for RIB downloads"""
         while True:
             downloaded_any, reached_end_time = await self.download_rib_window()
             if reached_end_time:
@@ -849,7 +829,6 @@ class BGPDataDownloader:
                 await asyncio.sleep(0)
 
     async def run(self):
-        """Main async run method"""
         await asyncio.gather(
             self.run_upd_loop(),
             self.run_rib_loop()

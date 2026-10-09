@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot historical replay downloader (simple thread-pool edition).
-
-Design goals:
-- Generate all tasks for a fixed [start_time, end_time) window.
-- Download with a direct ThreadPoolExecutor model.
-- Reuse HTTP session per worker thread.
-"""
+"""Download historical RIB and UPDATE files for a fixed UTC window."""
 
 import argparse
 import bz2
@@ -196,13 +190,7 @@ def _parse_normalized_rib_task(path: str):
 
 
 def select_earliest_rib_per_collector(tasks):
-    """Keep one baseline snapshot per collector for one-shot replay.
-
-    A replay window contains several periodic RIB snapshots per collector, but
-    the parser needs only the earliest snapshot as its baseline; subsequent
-    state is reconstructed from updates.  Keeping all snapshots needlessly
-    multiplies the decompressed workspace by the number of snapshot periods.
-    """
+    """Keep the earliest RIB per collector; reconstruct later state from UPDATEs."""
     selected = {}
     passthrough = []
     for task in tasks:
@@ -364,8 +352,7 @@ def hydrate_rib_tasks_from_cache(tasks, cache_root: str, no_network_fallback: bo
 
         try:
             _remove_download_artifacts(path, path + ".part")
-            # The historical runner preloads the zlib-enabled wandio 6.0.4,
-            # allowing both gzip and bzip2 archives to remain read-only links.
+            # The runner preloads wandio with zlib, so compressed archives can stay read-only links.
             os.symlink(cache_path, path)
             stats.downloaded += 1
         except Exception as exc:

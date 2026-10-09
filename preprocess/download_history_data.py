@@ -1,4 +1,3 @@
-# download history data from RIPE RIS Archive for all the RRCs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import random
@@ -27,7 +26,6 @@ AVA_RRCS = [
     "18", "19", "20", "21", "22", "23", "24", "25", "26"
 ]
 
-# Create a session with retry mechanism
 def create_retry_session(retries=3, backoff_factor=0.3, status_forcelist=(500, 502, 504)):
     session = requests.Session()
     retry = Retry( 
@@ -42,7 +40,6 @@ def create_retry_session(retries=3, backoff_factor=0.3, status_forcelist=(500, 5
     session.mount('https://', adapter)
     return session
 
-# Cache management
 def load_cache(cache_file):
     if os.path.exists(cache_file):
         try:
@@ -72,23 +69,18 @@ def save_progress(progress, progress_file):
 def get_cache_key(url):
     return hashlib.md5(url.encode()).hexdigest()
 
-# Check file integrity
 def verify_file_integrity(file_path, expected_size=None):
     if not os.path.exists(file_path):
         return False
     
-    # Check file size
     if expected_size and os.path.getsize(file_path) != expected_size:
         return False
     
-    # Check if file is empty or corrupted
     if os.path.getsize(file_path) == 0:
         return False
     
-    # For gz files, check file header and verify CRC integrity
     if file_path.endswith('.gz'):
         try:
-            # Check file header first
             with open(file_path, 'rb') as f:
                 header = f.read(3)
                 if header != b'\x1f\x8b\x08':
@@ -97,7 +89,6 @@ def verify_file_integrity(file_path, expected_size=None):
         except (gzip.BadGzipFile, OSError, IOError):
             return False
     
-    # For bz2 files, check file header
     if file_path.endswith('.bz2'):
         try:
             with open(file_path, 'rb') as f:
@@ -110,12 +101,10 @@ def verify_file_integrity(file_path, expected_size=None):
     
     return True
 
-# Resume download
 def download_with_resume(url: str, file_path: str, session=None, max_retries=5) -> bool:
     if session is None:
         session = create_retry_session()
     
-    # Check existing file
     resume_pos = 0
     if os.path.exists(file_path):
         resume_pos = os.path.getsize(file_path)
@@ -128,7 +117,6 @@ def download_with_resume(url: str, file_path: str, session=None, max_retries=5) 
         try:
             response = session.get(url, headers=headers, stream=True, timeout=30, verify=False)
             
-            # Check if resume is supported
             if resume_pos > 0 and response.status_code not in [206, 416]:
                 resume_pos = 0
                 headers = {}
@@ -139,7 +127,6 @@ def download_with_resume(url: str, file_path: str, session=None, max_retries=5) 
             
             response.raise_for_status()
             
-            # Get total file size
             content_length = response.headers.get('content-length')
             if content_length:
                 total_size = int(content_length)
@@ -148,14 +135,12 @@ def download_with_resume(url: str, file_path: str, session=None, max_retries=5) 
             else:
                 total_size = None
             
-            # Write to file
             mode = 'ab' if resume_pos > 0 else 'wb'
             with open(file_path, mode) as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
             
-            # Verify file integrity
             if verify_file_integrity(file_path, total_size):
                 return True
             else:
@@ -174,22 +159,17 @@ def download_with_resume(url: str, file_path: str, session=None, max_retries=5) 
     print(f"Failed to download after {max_retries} attempts: {url}")
     return False
 
-# download file using wget with retry and resume
 def download_one_file(url: str, file_path: str) -> bool:
-    # Check if file exists and is intact
     if verify_file_integrity(file_path):
         return True
     
-    # Download with retry mechanism
     session = create_retry_session()
     return download_with_resume(url, file_path, session)
 
-# Get file list (with cache)
 def get_file_list_with_cache(rrc_dir: str, cache_file: str, force_refresh=False):
     cache = load_cache(cache_file)
     cache_key = get_cache_key(rrc_dir)
     
-    # Check if cache exists and is not expired (24 hours)
     if not force_refresh and cache_key in cache:
         cache_data = cache[cache_key]
         cache_time = datetime.datetime.fromisoformat(cache_data['timestamp'])
@@ -200,7 +180,6 @@ def get_file_list_with_cache(rrc_dir: str, cache_file: str, force_refresh=False)
                            for name, time_str in cache_data['updates_files']]
             return ribs_files, updates_files
     
-    # Get new data
     session = create_retry_session()
     
     for attempt in range(3):
@@ -235,7 +214,6 @@ def get_file_list_with_cache(rrc_dir: str, cache_file: str, force_refresh=False)
             except:
                 continue
     
-    # Update cache - convert datetime object to string
     cache[cache_key] = {
         'ribs_files': [(name, time_obj.isoformat()) for name, time_obj in ribs_file_list],
         'updates_files': [(name, time_obj.isoformat()) for name, time_obj in updates_file_list],
@@ -250,7 +228,6 @@ def download_as_rank_data(date_str, output_file, *, strict=False):
     if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
         return
 
-    # Calculate start and end dates for the first day of the month
     try:
         dt = datetime.datetime.strptime(date_str, '%Y-%m-%d')
         month_start = dt.replace(day=1).strftime('%Y-%m-%d')
@@ -369,12 +346,10 @@ def download_as_rank_data(date_str, output_file, *, strict=False):
     finally:
         session.close()
 
-# download the data for all the RRCs
 def generate_task_for_one_duration(start_str: str, end_str: str, sub_dir_name: str, force_refresh=False):
     start_time = datetime.datetime.strptime(start_str, '%Y-%m-%d %H:%M:%S')
     end_time = datetime.datetime.strptime(end_str, '%Y-%m-%d %H:%M:%S')
     
-    # check if the sub directory exists
     sub_dir = os.path.join(DATASET_DIR, sub_dir_name)
     rib_dir = os.path.join(sub_dir, 'rib')
     upd_dir = os.path.join(sub_dir, 'upd')
@@ -395,7 +370,6 @@ def generate_task_for_one_duration(start_str: str, end_str: str, sub_dir_name: s
             if not ribs_file_list and not updates_file_list:
                 continue
             
-            # Process ribs files
             ribs_file_list = sorted(ribs_file_list, key=lambda x: x[1])
             
             # Download all RIB files within 24 hours before start_time
@@ -408,7 +382,6 @@ def generate_task_for_one_duration(start_str: str, end_str: str, sub_dir_name: s
                     path = os.path.join(rib_dir, file_name)
                     task_params_list.append((url, path))
 
-            # Process updates files
             updates_file_list = sorted(updates_file_list, key=lambda x: x[1])
             filtered_updates = []
             for file_name, file_time in updates_file_list:
@@ -437,7 +410,6 @@ def download_all_files(task_info, force_refresh=False):
     progress = load_progress(progress_file)
     task_key = f"{task_info[0]}_{task_info[1]}_{task_info[2]}"
     
-    # Check for previous progress
     if task_key in progress and not force_refresh:
         completed_files = set(progress[task_key].get('completed', []))
     else:
@@ -445,7 +417,6 @@ def download_all_files(task_info, force_refresh=False):
     
     task_params_list = generate_task_for_one_duration(*task_info, force_refresh=force_refresh)
     
-    # Download AS Rank data
     try:
         start_time = datetime.datetime.strptime(task_info[0], '%Y-%m-%d %H:%M:%S')
         date_str = start_time.strftime('%Y-%m-%d')
@@ -454,10 +425,8 @@ def download_all_files(task_info, force_refresh=False):
     except Exception as e:
         print(f"Failed to initiate AS Rank download: {e}")
 
-    # Filter completed files
     remaining_tasks = []
     for url, path in task_params_list:
-        # Check if decompressed file exists
         uncompressed_path = None
         if path.endswith('.gz'):
             uncompressed_path = path[:-3]
@@ -476,18 +445,16 @@ def download_all_files(task_info, force_refresh=False):
     if not remaining_tasks:
         return
     
-    # download the files parallelly
     failed_count = 0
     success_count = len(completed_files)
     total_count = len(task_params_list)
     
-    with ThreadPoolExecutor(max_workers=8) as executor:  # Reduce concurrency to avoid overload
+    with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(download_one_file, url, path) for url, path in remaining_tasks]
         
         for future in as_completed(futures):
             if future.result():
                 success_count += 1
-                # Update progress
                 completed_files.add(remaining_tasks[list(futures).index(future)][1])
                 progress[task_key] = {
                     'completed': list(completed_files),

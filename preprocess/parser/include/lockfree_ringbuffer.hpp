@@ -20,14 +20,12 @@
 #include "helpers.hpp"
 
 
-// RingBuffer configuration - use constexpr to ensure compile-time constants
-constexpr size_t TOTAL_BUFFER_SIZE = 128 * 1024 * 1024; // 128 MB
+constexpr size_t TOTAL_BUFFER_SIZE = 128 * 1024 * 1024;
 constexpr size_t RECORD_SIZE = sizeof(BGPRecord);
 // CAPACITY = 128*1024*1024 / 256 = 524288 entries
 constexpr size_t BUFFER_CAPACITY = TOTAL_BUFFER_SIZE / RECORD_SIZE;
 
-// 2MB huge page configuration constants
-constexpr size_t HUGEPAGE_2MB = 2 * 1024 * 1024; // 2MB
+constexpr size_t HUGEPAGE_2MB = 2 * 1024 * 1024;
 constexpr size_t HUGEPAGE_SHIFT_2MB = 21; // log2(2MB)
 constexpr size_t BATCH_SIZE = HUGEPAGE_2MB / RECORD_SIZE;
 
@@ -47,9 +45,7 @@ struct RingBufferData {
     BGPRecord data[BUFFER_CAPACITY];
 };
 
-// Huge page utility functions - use dynamic configuration
 namespace hugepage_utils {
-    // Check if 2MB huge pages are available
     inline bool is_2mb_hugepage_available() {
         std::ifstream free_pages("/sys/kernel/mm/hugepages/hugepages-2048kB/free_hugepages");
         if (!free_pages.is_open()) return false;
@@ -59,7 +55,6 @@ namespace hugepage_utils {
         return free_count > 0;
     }
     
-    // Get the number of available 2MB huge pages
     inline size_t get_available_2mb_hugepages() {
         std::ifstream free_pages("/sys/kernel/mm/hugepages/hugepages-2048kB/free_hugepages");
         if (!free_pages.is_open()) return 0;
@@ -69,23 +64,19 @@ namespace hugepage_utils {
         return free_count;
     }
     
-    // Calculate the number of required 2MB huge pages
     inline size_t pages_needed_2mb() {
         return (TOTAL_BUFFER_SIZE + HUGEPAGE_2MB - 1) / HUGEPAGE_2MB;
     }
     
-    // Get buffer size aligned to 2MB
     inline size_t get_aligned_buffer_size() {
         return ((TOTAL_BUFFER_SIZE + HUGEPAGE_2MB - 1) / HUGEPAGE_2MB) * HUGEPAGE_2MB;
     }
     
-    // Check if 2MB hugetlbfs is mounted
     inline bool is_2mb_hugetlbfs_mounted() {
         struct stat st;
         return (stat("/mnt/huge2mb", &st) == 0 && S_ISDIR(st.st_mode));
     }
     
-    // Print huge page status information
     inline void print_hugepage_info() {
         printf("=== Hugepage Information ===\n");
         printf("Target 2MB hugepage: %s\n", is_2mb_hugepage_available() ? "Available" : "Not Available");
@@ -100,12 +91,12 @@ namespace hugepage_utils {
 
 class LockFreeRingBufferManager {
 private:
-    int ctrl_fd; // Control block file descriptor
-    int data_fd; // Data block file descriptor
-    RingBufferControl* control; // Control block pointer
-    RingBufferData* data;       // Data block pointer
-    bool using_hugepages;       // Whether to use huge pages
-    size_t data_size;           // Data block size
+    int ctrl_fd;
+    int data_fd;
+    RingBufferControl* control;
+    RingBufferData* data;
+    bool using_hugepages;
+    size_t data_size;
 
 public:
     LockFreeRingBufferManager() : ctrl_fd(-1), data_fd(-1), control(nullptr), data(nullptr), using_hugepages(false), data_size(0) {}
@@ -166,7 +157,6 @@ public:
         }
         
         if (!using_hugepages) {
-            // Use regular file mapping
             data_size = sizeof(RingBufferData);
             data_fd = shm_open("/bgp_ringbuffer_data", O_CREAT | O_RDWR, 0666);
             if (data_fd == -1) { return false; }
@@ -187,7 +177,6 @@ public:
         // Data block: try hugepage file first, then regular shared memory
         data_fd = open("/mnt/huge2mb/bgp_ringbuffer_data", O_RDWR, 0666);
         if (data_fd != -1) {
-            // hugepage file exists
             struct stat st;
             if (fstat(data_fd, &st) == 0) {
                 data_size = st.st_size;
@@ -241,7 +230,6 @@ public:
         size_t current_write = control->write_pos.load(std::memory_order_relaxed);
         size_t cached_read = control->read_cache.load(std::memory_order_relaxed);
         
-        // Check if there is enough space to write the entire batch
         size_t space_available;
         if (current_write >= cached_read) {
             space_available = BUFFER_CAPACITY - (current_write - cached_read) - 1;
@@ -261,16 +249,13 @@ public:
             }
             
             if (space_available < count) {
-                return false; // Insufficient space
+                return false;
             }
         }
         
-        // Use memcpy for efficient batch copying
         if (current_write + count <= BUFFER_CAPACITY) {
-            // Single copy, no wraparound needed
             memcpy(&data->data[current_write], records, count * sizeof(BGPRecord));
         } else {
-            // Wraparound case needed
             size_t first_part = BUFFER_CAPACITY - current_write;
             size_t second_part = count - first_part;
             
@@ -310,7 +295,6 @@ public:
         size_t current_read = control->read_pos.load(std::memory_order_relaxed);
         size_t cached_write = control->write_cache.load(std::memory_order_relaxed);
         
-        // Calculate available data to read
         size_t available;
         if (cached_write >= current_read) {
             available = cached_write - current_read;
@@ -330,18 +314,15 @@ public:
             }
             
             if (available == 0) {
-                return 0; // No data available to read
+                return 0;
             }
         }
         
         size_t to_read = std::min(available, max_count);
         
-        // Use memcpy for efficient batch copying
         if (current_read + to_read <= BUFFER_CAPACITY) {
-            // Single copy, no wraparound needed
             memcpy(buffer, &data->data[current_read], to_read * sizeof(BGPRecord));
         } else {
-            // Wraparound case needed
             size_t first_part = BUFFER_CAPACITY - current_read;
             size_t second_part = to_read - first_part;
             
@@ -377,14 +358,12 @@ public:
         return get_alignment_records_needed(current_write);
     }
 
-    // Get the number of records needed to align read pointer to BATCH_SIZE boundary
     size_t get_read_alignment_records_needed() const {
         size_t current_read = control->read_pos.load(std::memory_order_relaxed);
         return get_alignment_records_needed(current_read);
     }
 
 private:
-    // Generic alignment calculation function - calculate the number of records needed to align specified position to BATCH_SIZE boundary
     static size_t get_alignment_records_needed(size_t position) {
         size_t current_batch_offset = position % BATCH_SIZE;
         return current_batch_offset == 0 ? 0 : BATCH_SIZE - current_batch_offset;
