@@ -3,6 +3,12 @@
 PARADE experiments use the [repository environment](../README.md#environment).
 Each launcher supports `--help`, `--dry-run` and `--output-dir`.
 
+```bash
+# All eight historical events, or KLAYswap alone.
+bash experiments/run_main.sh
+bash experiments/run_main.sh --datasets klayswap
+```
+
 | Entry point | Default workload |
 | --- | --- |
 | `run_main.sh` | Eight historical events |
@@ -13,7 +19,6 @@ Each launcher supports `--help`, `--dry-run` and `--output-dir`.
 ## Historical events
 
 ```bash
-bash experiments/run_main.sh
 bash experiments/run_main.sh --datasets klayswap,celer-bridge \
   --raw-data-base /path/to/bgp --output-dir experiments/results/main_subset
 ```
@@ -24,10 +29,32 @@ Events and UTC windows are defined in
 preprocessing, training, calibration, detection, filtering and visualization.
 Defaults are dimension 24, K=2 and seed 42; `TRAIN_*` environment overrides apply.
 
-Data and models are under `dataset/<event-id>/`; logs and `summary.csv/json` are
-under `experiments/results/main/`. Plotting has separate `visualization_status`
+Raw RIB/UPDATE files are downloaded from [RIPE RIS](https://data.ris.ripe.net/)
+and [RouteViews](https://archive.routeviews.org/) into `data/raw/<event-id>/`
+by default; `--raw-data-base` changes that root. Parsed data/caches are under
+`dataset/<event-id>/`, models under its `saved_models/`, and detection outputs
+under its `results/`. Logs and `summary.csv/json` are under
+`experiments/results/main/`. **For historical events, `--output-dir` changes
+only logs and summaries, not dataset/cache/model paths.** The author's full
+experiments accumulated over 1 TB of raw files and over 200 GB of intermediate
+caches, not per-event minimum requirements.
+
+Plotting has separate `visualization_status`
 and `visualization_error` fields. Main-pipeline failures return a nonzero exit code.
 Run one historical replay at a time.
+
+To summarize existing outputs without rerunning an event:
+
+```bash
+python experiments/scripts/summarize_events.py \
+  --datasets rostelecom-2,vodafone,celer-bridge,safehost,tic,voxility,cloudflare,klayswap \
+  --dataset-root dataset --output-dir experiments/results/historical_summary
+```
+
+`historical_metrics.csv` reports candidate/detection rows and unique prefixes,
+ASNs and saved AS groups before and after organization/RPKI filtering.
+Fingerprint exemptions already apply to detector outputs; filtering-reason counts
+can overlap. These are run statistics rather than Table 1 ground-truth metrics.
 
 ## Dimension and K
 
@@ -61,11 +88,22 @@ anomalies, with attacker/recipient rank > 2,000. Five control sets use seeds 42â
 each repeat has 6,000 fixed anomalies and 24,000 controls. Replay needs only the
 Python dependencies, saved samples and inference bundle.
 
+Download the two assets from the fixed
+[v1.1.0 release](https://github.com/weiyz23/CCS26-Parade/releases/tag/v1.1.0):
+[simulation_bundle.tar.gz](https://github.com/weiyz23/CCS26-Parade/releases/download/v1.1.0/simulation_bundle.tar.gz)
+(179 MB) and
+[SHA256SUMS](https://github.com/weiyz23/CCS26-Parade/releases/download/v1.1.0/SHA256SUMS).
+
 ```bash
-mkdir -p /path/to/inputs
-tar -xzf /path/to/simulation_bundle.tar.gz -C /path/to/inputs
+mkdir -p data/ae-release-v1.1.0
+curl -fL https://github.com/weiyz23/CCS26-Parade/releases/download/v1.1.0/simulation_bundle.tar.gz \
+  -o data/ae-release-v1.1.0/simulation_bundle.tar.gz
+curl -fL https://github.com/weiyz23/CCS26-Parade/releases/download/v1.1.0/SHA256SUMS \
+  -o data/ae-release-v1.1.0/SHA256SUMS
+(cd data/ae-release-v1.1.0 && sha256sum -c SHA256SUMS)
+tar -xzf data/ae-release-v1.1.0/simulation_bundle.tar.gz -C data/ae-release-v1.1.0
 bash experiments/run_simulation.sh \
-  --archive-dir /path/to/inputs/bundle --output-dir /path/to/results/mixed
+  --archive-dir data/ae-release-v1.1.0/bundle --output-dir experiments/results/mixed
 ```
 
 The bundle contains `mixed_manifest.parquet`, `data/`, `model/`,

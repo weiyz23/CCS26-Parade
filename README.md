@@ -1,14 +1,38 @@
 # PARADE
 
 BGP anomaly detection with hyperbolic prefix–AS embeddings. This repository
-provides preprocessing, offline training and historical replay. Raw observations
-and checkpoints are supplied separately. See [AE experiments](experiments/README.md)
+provides preprocessing, offline training and historical replay. Historical launchers
+download their inputs automatically; frozen mixed-benchmark inputs are Release attachments.
+See [AE experiments](experiments/README.md)
 for historical events, sensitivity experiments and the archived mixed benchmark.
+
+## Start here
+
+After [environment setup](#environment), run from the repository root:
+
+```bash
+# All eight historical events.
+bash experiments/run_main.sh
+
+# KLAYswap only.
+bash experiments/run_main.sh --datasets klayswap
+```
+
+For the saved mixed benchmark, use the [v1.1.0 bundle download and replay](experiments/README.md#archived-mixed-benchmark).
 
 ## Environment
 
-Requires Linux, Python 3.12, CMake, a C++17 compiler and
-[libbgpstream](https://bgpstream.caida.org/docs/install/bgpstream) headers/libraries.
+Requires Linux, Python 3.12, CMake, a C++17 compiler and libbgpstream headers/libraries.
+For Ubuntu 22.04 and earlier, use the [official installation instructions](https://bgpstream.caida.org/docs/install/bgpstream).
+For Ubuntu 24.04, follow the author's
+[libbgpstream build guide](https://github.com/weiyz23/libbgpstream-guide-for-Ubuntu24.04):
+
+```bash
+git clone --recurse-submodules https://github.com/weiyz23/libbgpstream-guide-for-Ubuntu24.04.git
+```
+
+Follow its wandio and libbgpstream build/install steps, then run `sudo ldconfig`.
+Return to this repository before the commands below.
 Training uses CUDA when available; choose a compatible
 [PyTorch build](https://pytorch.org/get-started/locally/).
 
@@ -29,14 +53,11 @@ use `.conda/bin` when present, otherwise Python from `PATH`.
 ## Run
 
 ```bash
-# Download, preprocess, replay, train and detect KLAYswap.
-bash preprocess/run.sh full-once klayswap
-
 # Train and detect using an existing dataset.
 bash hyperbolic_model/run.sh "$(pwd)/dataset/klayswap"
 
 # Supply a different raw-data location.
-bash preprocess/run.sh --raw-data-base /path/to/bgp full-once klayswap
+bash experiments/run_main.sh --datasets klayswap --raw-data-base /path/to/bgp
 
 # Replay a custom UTC window.
 mkdir -p dataset/my_dataset
@@ -62,6 +83,25 @@ Individual stages are `hyperbolic_model/{train,calc_thresholds,detect,filter}.py
 use their `--help` options for direct invocation.
 
 ## Inputs and outputs
+
+Raw RIB/UPDATE files come from [RIPE RIS](https://data.ris.ripe.net/) and
+[RouteViews](https://archive.routeviews.org/). The author's complete experiments
+accumulated **over 1 TB of raw files and over 200 GB of intermediate caches**;
+these are cumulative totals, not a minimum for each event.
+
+For the historical-event launcher:
+
+| Location | Contents |
+| --- | --- |
+| `data/raw/<event-id>/` | Default raw-data location; override with `--raw-data-base` |
+| `dataset/<event-id>/` | Parsed caches, mappings, tensors and candidate paths |
+| `dataset/<event-id>/saved_models/` | Checkpoints and calibrated thresholds |
+| `dataset/<event-id>/results/`, `visualizations/` | Detection/filter outputs and plots |
+| `experiments/results/main/` | Run logs, configuration and summary files |
+
+`run_main.sh --output-dir` changes the log/summary location only; datasets,
+caches and models remain under `dataset/`. These directories may be symlinked
+to larger storage volumes.
 
 ```text
 dataset/<name>/
@@ -89,6 +129,16 @@ under `results/`. Thresholds are saved beside the model; `--model-only` on
 Visualization runs after detection. Its status is saved separately in
 `visualization_status.json`; plotting failures leave successful detection complete.
 For individual plots, use `hyperbolic_model/visualize*.py --help`.
+
+Summarize existing event results without rerunning the pipeline:
+
+```bash
+python experiments/scripts/summarize_events.py --datasets klayswap \
+  --dataset-root dataset --output-dir experiments/results/historical_summary
+```
+
+`historical_metrics.csv` contains descriptive run statistics, not the paper's
+Table 1 ground-truth evaluation. See [AE experiments](experiments/README.md).
 
 ## Implementation scope
 

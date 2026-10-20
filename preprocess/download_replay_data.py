@@ -352,7 +352,7 @@ def hydrate_rib_tasks_from_cache(tasks, cache_root: str, no_network_fallback: bo
 
         try:
             _remove_download_artifacts(path, path + ".part")
-            # The runner preloads wandio with zlib, so compressed archives can stay read-only links.
+            # Link shared archives without modifying their contents.
             os.symlink(cache_path, path)
             stats.downloaded += 1
         except Exception as exc:
@@ -695,10 +695,7 @@ def run_once(args) -> int:
     failed_upd_tasks = [task for task in failed_tasks if f"{os.sep}upd{os.sep}" in task[1]]
 
     if overall.failed > 0:
-        print(
-            "Warning: continuing despite failed downloads. "
-            "Downstream stages will use the raw files that are available."
-        )
+        print("Replay download failed; downstream stages must not use incomplete inputs.")
         print(
             "Failed task breakdown: "
             f"rib={len(failed_rib_tasks)} upd={len(failed_upd_tasks)}"
@@ -707,6 +704,7 @@ def run_once(args) -> int:
             print(f"  FAILED {path} <- {url}")
         if len(failed_tasks) > 20:
             print(f"  ... {len(failed_tasks) - 20} more failed tasks omitted")
+        return 1
 
     return 0
 

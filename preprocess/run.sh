@@ -129,7 +129,7 @@ DATASET_TIME_WINDOWS["cloudflare"]="2026-01-22 20:00:00,2026-01-22 23:59:00"
 DATASET_TIME_WINDOWS["voxility"]="2025-04-01 06:00:00,2025-04-01 10:00:00"
 DATASET_TIME_WINDOWS["rostelecom-2"]="2020-04-01 18:00:00,2020-04-01 21:00:00"
 
-DATASET_DIR="$(realpath "../dataset/$DATASET_INPUT")"
+DATASET_DIR="$(realpath -m "../dataset/$DATASET_INPUT")"
 RAW_DATA_BASE="${RAW_DATA_BASE_INPUT:-${RAW_DATA_BASE:-/data/parade}}"
 RAW_DATA_DIR="$RAW_DATA_BASE/$DATASET_INPUT"
 # Historical validation uses parser caches; skip the multi-GiB simulation reference.

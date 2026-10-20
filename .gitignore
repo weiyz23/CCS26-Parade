@@ -13,7 +13,7 @@ ENV/
 
 # Data (Root and subdirectories)
 data/
-dataset/
+dataset
 processed_data/
 saved_models/
 visualizations/
