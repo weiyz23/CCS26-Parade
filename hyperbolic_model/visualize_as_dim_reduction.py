@@ -34,14 +34,16 @@ TIER1_ASNS = {
 AS_PATH_COLOR = "#d62728"
 
 
-def get_poincare_distance_matrix(model, x_tensor, max_dist=15.0):
+def get_poincare_distance_matrix(model, x_tensor, max_dist=15.0, batch_size=256):
     if x_tensor.device.type != 'cpu':
         x_tensor = x_tensor.cpu()
-    x_i = x_tensor.unsqueeze(1)
-    x_j = x_tensor.unsqueeze(0)
+    dists = torch.empty((len(x_tensor), len(x_tensor)), dtype=x_tensor.dtype)
     with torch.no_grad():
-        dists = model.manifold.dist(x_i, x_j)
-    dists = torch.clamp(dists, max=max_dist)
+        for start in range(0, len(x_tensor), batch_size):
+            batch = model.manifold.dist(
+                x_tensor[start:start + batch_size].unsqueeze(1), x_tensor.unsqueeze(0)
+            )
+            dists[start:start + batch_size] = batch.clamp(max=max_dist)
     return dists.numpy()
 
 def get_hyperbolic_radius(model, embeddings):

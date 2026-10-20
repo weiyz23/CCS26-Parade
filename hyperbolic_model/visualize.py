@@ -120,12 +120,11 @@ class HyperbolicVisualizer:
             self.triplets = load_visualization_triplets(triplets_path)
             self.triplets_df = pd.DataFrame(self.triplets.numpy(), columns=['pid', 'aid', 'hop'])
 
-            # Create set of positive pairs (depth < 8)
-            self.positive_pairs = set()
-            mask_pos = self.triplets[:, 2] < 8
-            pos_triplets = self.triplets[mask_pos]
-            for row in pos_triplets:
-                self.positive_pairs.add((int(row[0]), int(row[1])))
+            triplets = self.triplets.numpy()
+            mask_pos = triplets[:, 2] < 8
+            self.positive_pairs = np.unique(
+                triplets[mask_pos, 0] * len(self.as_emb) + triplets[mask_pos, 1]
+            )
 
         fp_path = self.data_dir / "profile_fingerprints.pt"
         if fp_path.exists():
@@ -213,11 +212,14 @@ class HyperbolicVisualizer:
         attempts = 0
         max_attempts = n_samples * 10
         while len(neg_pairs) < n_samples and attempts < max_attempts:
-            pids = torch.randint(0, num_profiles, (n_samples - len(neg_pairs),))
-            aids = torch.randint(0, num_as, (n_samples - len(neg_pairs),))
-            for pid, aid in zip(pids.tolist(), aids.tolist()):
-                if (pid, aid) not in self.positive_pairs:
-                    neg_pairs.append((pid, aid))
+            pids = torch.randint(0, num_profiles, (n_samples - len(neg_pairs),)).numpy()
+            aids = torch.randint(0, num_as, (n_samples - len(neg_pairs),)).numpy()
+            keys = pids * num_as + aids
+            indices = np.searchsorted(self.positive_pairs, keys)
+            in_range = indices < len(self.positive_pairs)
+            is_positive = np.zeros(len(keys), dtype=bool)
+            is_positive[in_range] = self.positive_pairs[indices[in_range]] == keys[in_range]
+            neg_pairs.extend(zip(pids[~is_positive].tolist(), aids[~is_positive].tolist()))
             attempts += 1
         if len(neg_pairs) < n_samples:
             print(f"Warning: Could only sample {len(neg_pairs)} negative pairs out of {n_samples} requested.")
@@ -588,14 +590,16 @@ class HyperbolicVisualizer:
 
         origin_df = self.triplets_df[self.triplets_df['hop'] == 0]
         pid_to_origins = origin_df.groupby('pid')['aid'].apply(list).to_dict()
-        pid_to_associated = self.triplets_df.groupby('pid')['aid'].apply(set).to_dict()
 
-        valid_pids = [p for p in pid_to_origins.keys() if p in pid_to_associated]
+        valid_pids = list(pid_to_origins)
         MAX_SAMPLES_ORIGIN_LOOP = 10000
         if len(valid_pids) > MAX_SAMPLES_ORIGIN_LOOP:
             sampled_pids = np.random.choice(valid_pids, MAX_SAMPLES_ORIGIN_LOOP, replace=False)
         else:
             sampled_pids = valid_pids
+
+        associated_df = self.triplets_df[self.triplets_df['pid'].isin(sampled_pids)]
+        pid_to_associated = associated_df.groupby('pid')['aid'].apply(set).to_dict()
 
         assoc_dists = []
         unrelated_dists = []
@@ -617,7 +621,7 @@ class HyperbolicVisualizer:
                     min_dists, _ = dists.min(dim=1)
                     assoc_dists.extend(min_dists.cpu().numpy())
 
-            needed = 5000
+            needed = max(1, MAX_SAMPLES_PLOT // max(1, len(sampled_pids)))
             candidates_pool = np.random.randint(0, num_as, needed * 5)
             unrelated_indices = [c for c in candidates_pool if c not in pid_to_associated[pid]]
             if len(unrelated_indices) > needed:
@@ -631,6 +635,8 @@ class HyperbolicVisualizer:
                      unrelated_dists.extend(min_unrel.cpu().numpy())
 
         plt.figure(figsize=(6, 4), facecolor='white')
+        if len(assoc_dists) > MAX_SAMPLES_PLOT:
+            assoc_dists = np.random.choice(assoc_dists, MAX_SAMPLES_PLOT, replace=False)
         sns.kdeplot(assoc_dists, fill=True, label="Related AS", color="green")
         sns.kdeplot(unrelated_dists, fill=True, label="Unrelated AS", color="red")
 
@@ -649,6 +655,8 @@ class HyperbolicVisualizer:
 
         mask_pos = (self.triplets[:, 2] < 8)
         pos_triplets = self.triplets[mask_pos]
+        if len(pos_triplets) > 50000:
+            pos_triplets = pos_triplets[torch.randperm(len(pos_triplets))[:50000]]
 
         pos_res = self._calc_dist_batched(
             self.prof_emb[pos_triplets[:, 0]],
@@ -666,6 +674,8 @@ class HyperbolicVisualizer:
 
         mask_origin = (self.triplets[:, 2] == 0)
         origin_triplets = self.triplets[mask_origin]
+        if len(origin_triplets) > 50000:
+            origin_triplets = origin_triplets[torch.randperm(len(origin_triplets))[:50000]]
         origin_res = np.array([])
         if len(origin_triplets) > 0:
             origin_res = self._calc_dist_batched(

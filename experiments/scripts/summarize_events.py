@@ -95,12 +95,21 @@ def main(argv=None):
         args.output_dir.mkdir(parents=True, exist_ok=True)
         output = args.output_dir / "historical_metrics.csv"
         write_csv(output, rows, FIELDS)
-        columns = ("dataset", "category", "candidate_rows", "detected_rows", "pre_filter_prefixes",
-                   "post_filter_prefixes", "post_filter_groups", "removed_rows")
-        widths = {column: max(len(column), *(len(str(row[column])) for row in rows)) for column in columns}
+        display_rows = [{
+            "dataset": row["dataset"], "type": row["category"],
+            "candidates": row["candidate_rows"], "detected": row["detected_rows"],
+            "prefixes": f'{row["pre_filter_prefixes"]}/{row["post_filter_prefixes"]}',
+            "ASNs": f'{row["pre_filter_asns"]}/{row["post_filter_asns"]}',
+            "groups": f'{row["pre_filter_groups"]}/{row["post_filter_groups"]}',
+            "removed": row["removed_rows"], "orgId": row["org_id_removed"],
+            "orgName": row["org_name_removed"], "RPKI": row["rpki_removed"],
+        } for row in rows]
+        columns = tuple(display_rows[0])
+        widths = {column: max(len(column), *(len(str(row[column])) for row in display_rows)) for column in columns}
         print("  ".join(column.ljust(widths[column]) for column in columns))
-        for row in rows:
+        for row in display_rows:
             print("  ".join(str(row[column]).ljust(widths[column]) for column in columns))
+        print("prefixes/ASNs/groups: before/after filtering; orgId/orgName/RPKI counts may overlap.")
         print(f"Saved {output}")
     except (OSError, ValueError, KeyError, csv.Error) as exc:
         print(f"Historical summary failed: {exc}", file=sys.stderr)
