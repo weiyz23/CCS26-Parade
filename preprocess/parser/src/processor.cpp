@@ -413,7 +413,6 @@ void process_upd_file(const string& filepath) {
 }
 
 void materialize_profile_inputs() {
-    sort_unique_keys(rib_entry_keys);
     for (uint64_t key : rib_entry_keys) {
         const auto [prefix_id, path_id] = decode_entry_key(key);
         if (prefix_id < 0 || path_id < 0
@@ -452,7 +451,7 @@ void materialize_profile_inputs() {
 void write_rib_artifacts(const string& output_dir) {
     fs::create_directories(output_dir);
     if (getenv("PARADE_SKIP_RIB_CACHE") == nullptr) {
-        cout << "Constructing and saving BGPRecords from cache..." << '\n';
+        cout << "Constructing and saving BGPRecords from cache..." << endl;
         ofstream ofs(output_dir + "/rib_records_cache.bin", ios::binary);
         const uint64_t count = rib_entry_keys.size();
         ofs.write(reinterpret_cast<const char*>(&count), sizeof(count));
@@ -461,6 +460,7 @@ void write_rib_artifacts(const string& output_dir) {
             const auto [prefix_id, path_id] = decode_entry_key(key);
             const auto& path = id_to_linear_path[path_id];
             BGPRecord record;
+            memset(&record, 0, sizeof(record));
             record.timestamp = 0;
             record.origin_as = path.empty() ? 0 : path.back();
             record.signal = 0;
@@ -494,7 +494,7 @@ void write_rib_artifacts(const string& output_dir) {
     // Compact supplemental reference: [count:u64], then repeated
     // [prefix_id:i32][path_len:u8][path_asns:u32 * path_len].
     if (getenv("PARADE_SKIP_REFERENCE_PATHS") == nullptr) {
-        cout << "Saving compact simulation path reference..." << '\n';
+        cout << "Saving compact simulation path reference..." << endl;
         ofstream ofs(output_dir + "/reference_paths.bin", ios::binary);
         uint64_t count = 0;
         for (uint64_t key : rib_entry_keys) {
@@ -601,6 +601,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    sort_unique_keys(rib_entry_keys);
+    // Write path caches before allocating the large prefix maps.
+    if (!rib_entry_keys.empty()) {
+        write_rib_artifacts(output_dir);
+    }
     materialize_profile_inputs();
 
     cout << "Data loading complete.\n";
@@ -613,8 +618,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Emit path artifacts before releasing path storage for profile aggregation.
-    write_rib_artifacts(output_dir);
     release_path_storage();
 
     cout << "Aggregating profiles...\n";
