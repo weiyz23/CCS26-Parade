@@ -89,16 +89,16 @@ each repeat has 6,000 fixed anomalies and 24,000 controls. Replay needs only the
 Python dependencies, saved samples and inference bundle.
 
 Download the two assets from the fixed
-[v1.1.0 release](https://github.com/weiyz23/CCS26-Parade/releases/tag/v1.1.0):
-[simulation_bundle.tar.gz](https://github.com/weiyz23/CCS26-Parade/releases/download/v1.1.0/simulation_bundle.tar.gz)
+[Parade v1.1.0 release](https://github.com/weiyz23/CCS26-Parade/releases/tag/ae-revised):
+[simulation_bundle.tar.gz](https://github.com/weiyz23/CCS26-Parade/releases/download/ae-revised/simulation_bundle.tar.gz)
 (179 MB) and
-[SHA256SUMS](https://github.com/weiyz23/CCS26-Parade/releases/download/v1.1.0/SHA256SUMS).
+[SHA256SUMS](https://github.com/weiyz23/CCS26-Parade/releases/download/ae-revised/SHA256SUMS).
 
 ```bash
 mkdir -p data/ae-release-v1.1.0
-curl -fL https://github.com/weiyz23/CCS26-Parade/releases/download/v1.1.0/simulation_bundle.tar.gz \
+curl -fL https://github.com/weiyz23/CCS26-Parade/releases/download/ae-revised/simulation_bundle.tar.gz \
   -o data/ae-release-v1.1.0/simulation_bundle.tar.gz
-curl -fL https://github.com/weiyz23/CCS26-Parade/releases/download/v1.1.0/SHA256SUMS \
+curl -fL https://github.com/weiyz23/CCS26-Parade/releases/download/ae-revised/SHA256SUMS \
   -o data/ae-release-v1.1.0/SHA256SUMS
 (cd data/ae-release-v1.1.0 && sha256sum -c SHA256SUMS)
 tar -xzf data/ae-release-v1.1.0/simulation_bundle.tar.gz -C data/ae-release-v1.1.0
